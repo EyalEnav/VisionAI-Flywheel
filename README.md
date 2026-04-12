@@ -1,8 +1,11 @@
-# VLM Fine-Tuning Dataset Pipeline
+# VisionAI-Flywheel
 
-Synthetic surveillance video generation pipeline for VLM fine-tuning.
+> **Synthetic → Real → Fine-Tune**  
+> End-to-end pipeline for generating annotated surveillance video training data for VLM fine-tuning.
 
-## Architecture
+![Synthetic VLM Studio UI](docs/ui_screenshot.png)
+
+## Pipeline
 
 ```
 Scene Prompt
@@ -18,6 +21,15 @@ Scene Prompt
      │
      └── [VSS / Cosmos-Reason2] Auto-annotation → VLMAnnotation DB
 ```
+
+## Dependencies & Credits
+
+| Component | Source |
+|-----------|--------|
+| **NVIDIA VSS Blueprint 3.1** | [github.com/NVIDIA/video-search-and-summarization](https://github.com/NVIDIA/video-search-and-summarization) |
+| **Kimodo** (text → motion) | [github.com/NVlabs/Kimodo](https://github.com/NVlabs/Kimodo) |
+| **Cosmos-Transfer2** (Sim2Real) | [github.com/NVIDIA/Cosmos-Transfer2](https://github.com/NVIDIA/Cosmos-Transfer2) |
+| **SOMA** (mesh skinning) | NVlabs / SOMA |
 
 ## Services
 
@@ -61,8 +73,15 @@ cd ../cosmos-transfer
 ./run.sh input.mp4 "your scene prompt" output.mp4
 ```
 
-## Submodules
+## License
 
-- `kimodo/` → https://github.com/NVlabs/Kimodo (git submodule)
-- `cosmos-transfer2.5/` → https://github.com/NVIDIA/Cosmos-Transfer2 (git submodule)
-- `video-search-and-summarization/` → NVIDIA VSS Blueprint 3.1 (git submodule)
+This project is released under the [Apache 2.0 License](LICENSE).
+
+**Third-party components** retain their original licenses:
+- NVIDIA VSS Blueprint 3.1 — [NVIDIA License](https://github.com/NVIDIA/video-search-and-summarization/blob/main/LICENSE)
+- Cosmos-Transfer2 — [Apache 2.0 / NVIDIA Open Model License](https://github.com/NVIDIA/Cosmos-Transfer2/blob/main/LICENSE)
+- Kimodo — subject to NVlabs license terms
+
+> **Disclaimer:** This software is provided "as is", without warranty of any kind, express or implied.  
+> The authors and contributors shall not be held liable for any direct, indirect, incidental, special, exemplary, or consequential damages arising from the use of this software, including but not limited to bodily harm, property damage, surveillance misuse, or model outputs.  
+> Use responsibly and in compliance with all applicable laws and the terms of all upstream NVIDIA repositories.
