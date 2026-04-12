@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "render-api.fullname" . }}
+  labels:
+    {{- include "render-api.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: 9000
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "render-api.selectorLabels" . | nindent 4 }}

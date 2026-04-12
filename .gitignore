@@ -1,0 +1,39 @@
+# Secrets
+.env
+*.key
+*.pem
+
+# Model caches & weights (too large for git)
+*.onnx
+*.pt
+*.pth
+*.safetensors
+*.bin
+.cache/
+__pycache__/
+*.pyc
+
+# Video output
+/tmp/
+*.mp4
+*.bvh
+*.npz
+kimodo_output/
+render_output/
+
+# Logs
+*.log
+deploy_vss.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Submodule built artifacts
+kimodo/kimodo.egg-info/
+kimodo/kimodo/__pycache__/
+cosmos-transfer2.5/__pycache__/
+
+# Node
+node_modules/
+!examples/*.json

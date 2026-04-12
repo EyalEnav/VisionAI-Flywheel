@@ -1,0 +1,24 @@
+services:
+  cosmos-transfer:
+    image: cosmos-transfer:local   # built via ./build.sh
+    container_name: cosmos-transfer
+    runtime: nvidia
+    # Runs on GPU1 to avoid contention with VSS stack
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${TRANSFER_GPU_DEVICE:-1}
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - HF_HOME=/hf_cache
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+    volumes:
+      - ../../cosmos-transfer2.5:/workspace:ro
+      - ${HF_CACHE:-/ephemeral/cache/huggingface}:/hf_cache
+      - /tmp:/tmp
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${TRANSFER_GPU_DEVICE:-1}"]
+              capabilities: [gpu]
+    # No long-running process — invoked via `docker compose run`
+    command: ["echo", "cosmos-transfer ready"]

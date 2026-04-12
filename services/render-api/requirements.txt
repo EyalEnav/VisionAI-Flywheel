@@ -1,0 +1,14 @@
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart
+numpy
+torch
+trimesh
+pyrender
+opencv-python-headless
+Pillow
+mediapipe
+insightface
+onnxruntime-gpu
+aiofiles
+httpx

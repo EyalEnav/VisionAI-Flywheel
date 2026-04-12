@@ -1,0 +1,61 @@
+replicaCount: 1
+
+image:
+  repository: vlm-render-api
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 9000
+
+resources:
+  limits:
+    nvidia.com/gpu: 1
+    memory: "32Gi"
+    cpu: "8"
+  requests:
+    memory: "16Gi"
+    cpu: "4"
+
+# GPU node selector (RTX PRO 6000 Blackwell)
+nodeSelector:
+  nvidia.com/gpu.product: "NVIDIA-RTX-PRO-6000-Blackwell-Server-Edition"
+
+tolerations:
+  - key: "nvidia.com/gpu"
+    operator: "Exists"
+    effect: "NoSchedule"
+
+env:
+  PYOPENGL_PLATFORM: egl
+  COSMOS_REASON2_URL: "http://cosmos-reason2-svc:30082"
+  KIMODO_OUTPUT_DIR: /kimodo_output
+  RENDER_OUTPUT_DIR: /render_output
+  INSIGHTFACE_MODEL: /models/inswapper_128.onnx
+
+# GPU device index within the node
+gpuDeviceIndex: "0"
+
+persistence:
+  hfCache:
+    enabled: true
+    storageClass: ""
+    size: 200Gi
+    mountPath: /hf_cache
+
+  renderOutput:
+    enabled: true
+    storageClass: ""
+    size: 50Gi
+    mountPath: /render_output
+
+  kimodoOutput:
+    enabled: true
+    storageClass: ""
+    size: 10Gi
+    mountPath: /kimodo_output
+
+secrets:
+  ngcApiKey: ""   # set via --set or values override
+  hfToken: ""

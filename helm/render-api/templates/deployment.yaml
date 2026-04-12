@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "render-api.fullname" . }}
+  labels:
+    {{- include "render-api.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "render-api.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "render-api.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: render-api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 9000
+          env:
+            {{- range $k, $v := .Values.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: {{ .Values.gpuDeviceIndex | quote }}
+            - name: NGC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "render-api.fullname" . }}-secrets
+                  key: ngcApiKey
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "render-api.fullname" . }}-secrets
+                  key: hfToken
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: hf-cache
+              mountPath: {{ .Values.persistence.hfCache.mountPath }}
+            - name: render-output
+              mountPath: {{ .Values.persistence.renderOutput.mountPath }}
+            - name: kimodo-output
+              mountPath: {{ .Values.persistence.kimodoOutput.mountPath }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 9000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 9000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - name: hf-cache
+          persistentVolumeClaim:
+            claimName: {{ include "render-api.fullname" . }}-hf-cache
+        - name: render-output
+          persistentVolumeClaim:
+            claimName: {{ include "render-api.fullname" . }}-render-output
+        - name: kimodo-output
+          persistentVolumeClaim:
+            claimName: {{ include "render-api.fullname" . }}-kimodo-output

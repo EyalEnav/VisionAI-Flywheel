@@ -1,0 +1,6 @@
+{
+  "name": "clothed_surveillance",
+  "prompt": "Urban surveillance CCTV footage, city street, realistic lighting, photorealistic, pedestrians",
+  "video_path": "/tmp/clothed_surveillance.mp4",
+  "edge": {"control_weight": 1.0}
+}

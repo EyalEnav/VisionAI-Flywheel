@@ -1,0 +1,13 @@
+apiVersion: v2
+name: render-api
+description: SOMA mesh render API for VLM synthetic data pipeline
+type: application
+version: 1.0.0
+appVersion: "1.0"
+keywords:
+  - nvidia
+  - vlm
+  - synthetic-data
+  - surveillance
+maintainers:
+  - name: vlm-pipeline

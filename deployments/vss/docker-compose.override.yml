@@ -1,0 +1,39 @@
+# Override file for our custom VSS deployment on RTX PRO 6000 Blackwell.
+# Place this alongside the upstream video-search-and-summarization/deployments/compose.yml
+# Usage:
+#   cd video-search-and-summarization/deployments
+#   docker compose -f compose.yml -f ../../deployments/vss/docker-compose.override.yml \
+#     --profile bp_developer_base_2d up -d
+
+services:
+  # Force Cosmos-Reason2-8B onto GPU0 (shared with VSS)
+  cosmos-reason2-8b-shared-gpu:
+    environment:
+      - NGC_API_KEY=${NGC_CLI_API_KEY}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${VSS_GPU_DEVICE:-0}"]
+              capabilities: [gpu]
+
+  # Force Nemotron onto GPU0 as well (shared)
+  nvidia-nemotron-nano-9b-v2-shared-gpu:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${VSS_GPU_DEVICE:-0}"]
+              capabilities: [gpu]
+
+  # Expose VSS Agent port to host
+  vss-agent:
+    ports:
+      - "${VSS_AGENT_PORT:-8000}:8000"
+
+  # Nginx proxy — add our render API upstream
+  vss-proxy:
+    volumes:
+      - ../../deployments/vss/nginx-extra.conf:/etc/nginx/conf.d/render-api.conf:ro

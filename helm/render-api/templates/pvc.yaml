@@ -1,0 +1,34 @@
+{{- if .Values.persistence.hfCache.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "render-api.fullname" . }}-hf-cache
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {{ .Values.persistence.hfCache.storageClass | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.hfCache.size }}
+---
+{{- end }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "render-api.fullname" . }}-render-output
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {{ .Values.persistence.renderOutput.storageClass | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.renderOutput.size }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "render-api.fullname" . }}-kimodo-output
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: {{ .Values.persistence.kimodoOutput.storageClass | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.kimodoOutput.size }}
