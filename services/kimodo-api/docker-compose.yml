@@ -9,7 +9,8 @@ services:
     ports:
       - "9551:9551"
     environment:
-      - NVIDIA_VISIBLE_DEVICES=${VSS_GPU_DEVICE:-0}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=1
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - HF_HOME=/hf_cache
       - KIMODO_OUTPUT_DIR=/kimodo_output
@@ -31,7 +32,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["0"]
+              count: all
               capabilities: [gpu]
     shm_size: "16gb"
     ipc: host

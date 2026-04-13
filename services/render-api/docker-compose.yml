@@ -9,11 +9,12 @@ services:
     ports:
       - "${RENDER_API_PORT:-9000}:9000"
     environment:
-      - NVIDIA_VISIBLE_DEVICES=${VSS_GPU_DEVICE:-0}
+      - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
       - PYOPENGL_PLATFORM=egl
       - COSMOS_REASON2_URL=http://host-gateway:${VLM_PORT:-30082}
       - COSMOS_TRANSFER_URL=http://cosmos-transfer:8080
+      - KIMODO_API_URL=http://kimodo-api:9551
       - KIMODO_OUTPUT_DIR=/kimodo_output
       - RENDER_OUTPUT_DIR=/render_output
       - INSIGHTFACE_MODEL=/models/inswapper_128.onnx
@@ -25,6 +26,8 @@ services:
       - /tmp/insightface_models:/models:ro
       - ${KIMODO_OUTPUT_DIR:-/home/ubuntu/kimodo_output}:/kimodo_output
       - ${RENDER_OUTPUT_DIR:-/tmp/render_output}:/render_output
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker:ro
     extra_hosts:
       - "host-gateway:host-gateway"
     networks:
@@ -41,7 +44,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["${VSS_GPU_DEVICE:-0}"]
+              count: all
               capabilities: [gpu]
 
 networks:

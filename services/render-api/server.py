@@ -162,25 +162,25 @@ async def run_render_job(job_id, prompt, texture_prompt, texture_mode,
         import traceback; traceback.print_exc()
 
 
+KIMODO_API_URL = os.environ.get("KIMODO_API_URL", "http://kimodo-api:9551")
+
 async def generate_kimodo_motion(job_id, prompt):
-    """Call kimodo CLI to generate NPZ from text prompt."""
+    """Call kimodo-api HTTP service (pytorch:25.03 container with sm_120 support)."""
+    import aiohttp
     out_npz = str(RENDER_OUTPUT_DIR / f"{job_id}_motion.npz")
-    import os as _os
-    kimodo_env = _os.environ.copy()
-    kimodo_env["PYTHONPATH"] = "/kimodo:" + kimodo_env.get("PYTHONPATH", "")
-    # Use python3.10 directly (sys.executable resolves to broken symlink /usr/bin/python)
-    _python = "/usr/bin/python3.10"
-    proc = await asyncio.create_subprocess_exec(
-        _python, "-m", "kimodo.scripts.generate",
-        prompt,
-        "--output", out_npz,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        env=kimodo_env
-    )
-    stdout, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        raise RuntimeError(f"Kimodo failed: {stderr.decode()[-500:]}")
-    return out_npz
+    filename = f"{job_id}_motion.npz"
+    payload = {"prompt": prompt, "output_filename": filename}
+    timeout = aiohttp.ClientTimeout(total=600)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(f"{KIMODO_API_URL}/generate", json=payload) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                raise RuntimeError(f"kimodo-api HTTP {resp.status}: {body[:300]}")
+            data = await resp.json()
+    # File is written into shared /kimodo_output volume
+    # kimodo-api writes to its /kimodo_output, we read from RENDER_OUTPUT_DIR which maps same host path
+    # Return path in our filesystem
+    return str(RENDER_OUTPUT_DIR / filename)
 
 
 async def run_cosmos_transfer(job_id: str, input_video: str, prompt: str) -> str:
@@ -378,3 +378,55 @@ def full_startup():
     except Exception as e:
         return JSONResponse({'error': str(e)}, status_code=500)
 
+
+
+
+# ─── Motion list ─────────────────────────────────────────────────────────────
+@app.get('/motion/list')
+def motion_list():
+    """List available NPZ motion files in the Kimodo output directory."""
+    try:
+        files = sorted([f.name for f in KIMODO_OUTPUT_DIR.glob('*.npz')])
+        return {'files': files}
+    except Exception as e:
+        return {'files': [], 'error': str(e)}
+
+# ─── Motion preview ──────────────────────────────────────────────────────────
+@app.get('/motion/preview/{filename}')
+def motion_preview(filename: str, max_frames: int = 60, step: int = 2):
+    """
+    Return a downsampled skeleton trajectory for preview.
+    posed_joints: [frames, 77, 3] → return every  frames up to max_frames.
+    Also returns root_positions for trajectory overlay.
+    """
+    import numpy as np
+    # Sanitize filename
+    safe = Path(filename).name
+    npz_path = KIMODO_OUTPUT_DIR / safe
+    if not npz_path.exists():
+        return JSONResponse({'error': f'{safe} not found'}, status_code=404)
+    try:
+        d = np.load(str(npz_path), allow_pickle=True)
+        joints = d['posed_joints']          # [F, 77, 3]
+        roots  = d['root_positions']        # [F, 3]
+        total_frames = joints.shape[0]
+        # Downsample
+        idx = list(range(0, min(total_frames, max_frames * step), step))
+        joints_sub = joints[idx]            # [N, 77, 3]
+        roots_sub  = roots[idx]             # [N, 3]
+        # Normalize to 0-1 range for canvas rendering
+        mn, mx = joints_sub.min(), joints_sub.max()
+        joints_norm = ((joints_sub - mn) / (mx - mn + 1e-8)).tolist()
+        # Root trajectory (XZ plane)
+        rmin, rmax = roots_sub[:, [0,2]].min(), roots_sub[:, [0,2]].max()
+        traj = ((roots_sub[:, [0,2]] - rmin) / (rmax - rmin + 1e-8)).tolist()
+        return {
+            'filename': safe,
+            'total_frames': total_frames,
+            'preview_frames': len(idx),
+            'fps': 30,
+            'joints': joints_norm,    # [N, 77, 3] normalized
+            'trajectory': traj,       # [N, 2] XZ plane
+        }
+    except Exception as e:
+        return JSONResponse({'error': str(e)}, status_code=500)
