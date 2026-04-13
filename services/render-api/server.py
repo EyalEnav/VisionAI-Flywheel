@@ -30,7 +30,8 @@ KIMODO_OUTPUT_DIR = Path(os.environ.get("KIMODO_OUTPUT_DIR", "/kimodo_output"))
 RENDER_OUTPUT_DIR = Path(os.environ.get("RENDER_OUTPUT_DIR", "/tmp/render_output"))
 RENDER_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-COSMOS_REASON2_URL = os.environ.get("COSMOS_REASON2_URL", "http://localhost:30082")
+COSMOS_REASON2_URL   = os.environ.get("COSMOS_REASON2_URL",   "http://localhost:30082")
+COSMOS_TRANSFER_URL  = os.environ.get("COSMOS_TRANSFER_URL",  "http://cosmos-transfer:8080")
 INSIGHTFACE_MODEL  = os.environ.get("INSIGHTFACE_MODEL", "/models/inswapper_128.onnx")
 
 # ─── GPU status ───────────────────────────────────────────────────────────────
@@ -74,7 +75,7 @@ def status():
 async def generate(
     background_tasks: BackgroundTasks,
     prompt: str = Form(...),
-    texture_mode: str = Form("cosmos"),   # cosmos | skeleton | faceswap
+    texture_mode: str = Form("clothed"),   # clothed | skeleton | faceswap | transfer
     cosmos_prompt: str = Form(""),
     motion_file: str = Form(""),          # existing .npz filename, or "" to generate
     fps: int = Form(30),
@@ -123,13 +124,12 @@ async def run_render_job(job_id, prompt, texture_prompt, texture_mode,
 
         job["progress"] = 20
 
-        # 2. Get texture colors (skip if skeleton mode)
+        # 2. Get texture colors from prompt (no external NIM needed)
         colors = None
-        if texture_mode == "cosmos":
-            job["log"].append("Querying Cosmos-Reason2 for texture colors...")
-            colors, cosmos_resp = await get_cosmos_texture(texture_prompt)
-            job["cosmos_response"] = cosmos_resp
-            job["log"].append("Texture colors received")
+        if texture_mode in ("clothed", "cosmos"):
+            job["log"].append("Parsing texture colors from prompt...")
+            colors = parse_cosmos_colors(texture_prompt)
+            job["log"].append("Texture colors set")
         elif texture_mode == "skeleton":
             job["log"].append("Skeleton-only mode (Transfer2.5 will add texture)")
 
@@ -137,11 +137,19 @@ async def run_render_job(job_id, prompt, texture_prompt, texture_mode,
 
         # 3. Render SOMA mesh
         out_video = str(RENDER_OUTPUT_DIR / f"{job_id}.mp4")
-        job["log"].append(f"Rendering SOMA mesh ({texture_mode} mode)...")
+        effective_mode = "cosmos" if texture_mode in ("clothed", "cosmos", "transfer") else texture_mode
+        job["log"].append(f"Rendering SOMA mesh ({effective_mode} mode)...")
         await asyncio.get_event_loop().run_in_executor(
             None, render_soma_video,
-            npz_path, out_video, texture_mode, colors, face_path, fps, W, H
+            npz_path, out_video, effective_mode, colors, face_path, fps, W, H
         )
+
+        # 4. Optional: Cosmos Transfer2.5 Sim2Real
+        if texture_mode == "transfer":
+            job["log"].append("Running Cosmos Transfer2.5 Sim2Real...")
+            job["progress"] = 70
+            out_video = await run_cosmos_transfer(job_id, out_video, texture_prompt)
+            job["log"].append(f"Cosmos Transfer done → {out_video}")
 
         job["progress"] = 100
         job["status"]   = "done"
@@ -157,17 +165,50 @@ async def run_render_job(job_id, prompt, texture_prompt, texture_mode,
 async def generate_kimodo_motion(job_id, prompt):
     """Call kimodo CLI to generate NPZ from text prompt."""
     out_npz = str(RENDER_OUTPUT_DIR / f"{job_id}_motion.npz")
+    import os as _os
+    kimodo_env = _os.environ.copy()
+    kimodo_env["PYTHONPATH"] = "/kimodo:" + kimodo_env.get("PYTHONPATH", "")
+    # Use python3.10 directly (sys.executable resolves to broken symlink /usr/bin/python)
+    _python = "/usr/bin/python3.10"
     proc = await asyncio.create_subprocess_exec(
-        "python", "-m", "kimodo.scripts.generate",
-        "--prompt", prompt,
+        _python, "-m", "kimodo.scripts.generate",
+        prompt,
         "--output", out_npz,
-        "--text-encoder-url", "http://localhost:9550/",
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        env=kimodo_env
     )
     stdout, stderr = await proc.communicate()
     if proc.returncode != 0:
         raise RuntimeError(f"Kimodo failed: {stderr.decode()[-500:]}")
     return out_npz
+
+
+async def run_cosmos_transfer(job_id: str, input_video: str, prompt: str) -> str:
+    """Call the cosmos-transfer container API for Sim2Real conversion."""
+    import httpx
+    output_video = str(RENDER_OUTPUT_DIR / f"{job_id}_cosmos.mp4")
+    payload = {
+        "input_path":  input_video,
+        "output_path": output_video,
+        "prompt":      prompt,
+        "control_weight": 1.0
+    }
+    async with httpx.AsyncClient(timeout=600) as client:
+        # Start job
+        resp = await client.post(f"{COSMOS_TRANSFER_URL}/transfer", json=payload)
+        resp.raise_for_status()
+        transfer_job_id = resp.json()["job_id"]
+        # Poll until done
+        import asyncio as _aio
+        for _ in range(200):
+            await _aio.sleep(3)
+            poll = await client.get(f"{COSMOS_TRANSFER_URL}/jobs/{transfer_job_id}")
+            state = poll.json()
+            if state["status"] == "done":
+                return output_video
+            if state["status"] == "error":
+                raise RuntimeError("Cosmos Transfer failed: " + str(state.get("error")))
+        raise TimeoutError("Cosmos Transfer timed out after 600s")
 
 
 async def get_cosmos_texture(prompt):
@@ -236,3 +277,104 @@ def get_video(job_id: str):
         return JSONResponse({"error": "video not ready"}, status_code=404)
     return FileResponse(str(path), media_type="video/mp4",
                         filename=f"render_{job_id[:8]}.mp4")
+
+
+# ─── Docker status ────────────────────────────────────────────────────────────
+import subprocess, json as _json
+
+WATCHED = ['render-api', 'vss-agent', 'vst', 'cosmos-transfer', 'nginx']
+
+@app.get('/render/docker-ps')
+def docker_ps():
+    try:
+        out = subprocess.check_output(
+            ['docker', 'ps', '-a', '--format', '{{json .}}'],
+            stderr=subprocess.STDOUT, timeout=10
+        ).decode()
+        rows = [_json.loads(l) for l in out.strip().splitlines() if l]
+        containers = []
+        for name in WATCHED:
+            match = next((r for r in rows if name in r.get('Names', '')), None)
+            if match:
+                containers.append({
+                    'name': name,
+                    'status': match.get('Status', ''),
+                    'state': 'running' if 'Up' in match.get('Status','') else 'stopped',
+                    'image': match.get('Image', ''),
+                })
+            else:
+                containers.append({'name': name, 'status': 'not found', 'state': 'missing', 'image': ''})
+        return {'containers': containers}
+    except Exception as e:
+        return {'error': str(e), 'containers': []}
+
+
+# ─── Service control (start / stop individual services) ──────────────────────
+import shlex
+
+SERVICES = {
+    'vss': {
+        'dir': '/home/ubuntu/video-search-and-summarization/deployments',
+        'up':  'docker compose -f compose.yml -f /home/ubuntu/vlm-pipeline/deployments/vss/docker-compose.override.yml --env-file /home/ubuntu/vlm-pipeline/deployments/vss/env.rtxpro6000bw up -d',
+        'down':'docker compose -f compose.yml -f /home/ubuntu/vlm-pipeline/deployments/vss/docker-compose.override.yml down',
+    },
+    'kimodo': {
+        'dir': '/home/ubuntu/kimodo',
+        'up':  'docker compose up -d',
+        'down':'docker compose down',
+    },
+    'render-api': {
+        'dir': '/home/ubuntu/vlm-pipeline/services/render-api',
+        'up':  'docker compose up -d',
+        'down':'docker compose down',
+    },
+    'cosmos-transfer': {
+        'dir': '/home/ubuntu/vlm-pipeline/services/cosmos-transfer',
+        'up':  'docker compose up -d',
+        'down':'docker compose down',
+    },
+    'nginx': {
+        'dir': '/home/ubuntu/vlm-pipeline/deployments/vss',
+        'up':  'docker compose up -d nginx',
+        'down':'docker compose stop nginx',
+    },
+}
+
+@app.post('/render/service/{service}/{action}')
+def service_control(service: str, action: str):
+    if service not in SERVICES:
+        return JSONResponse({'error': f'unknown service: {service}'}, status_code=400)
+    if action not in ('start', 'stop'):
+        return JSONResponse({'error': 'action must be start or stop'}, status_code=400)
+    cfg = SERVICES[service]
+    cmd = cfg['up'] if action == 'start' else cfg['down']
+    try:
+        # Run docker compose on the HOST filesystem via the mounted docker socket
+        full_cmd = f'cd {cfg[dir]} && {cmd}'
+        result = subprocess.run(
+            full_cmd, shell=True, capture_output=True, text=True, timeout=120,
+            env={**__import__('os').environ, 'HOME': '/root', 'PATH': '/usr/bin:/usr/local/bin:/bin'}
+        )
+        return {
+            'service': service, 'action': action,
+            'returncode': result.returncode,
+            'stdout': result.stdout[-500:],
+            'stderr': result.stderr[-500:],
+        }
+    except Exception as e:
+        return JSONResponse({'error': str(e)}, status_code=500)
+
+
+@app.post('/render/startup')
+def full_startup():
+    """Run startup.sh on the host via nsenter"""
+    try:
+        result = subprocess.run(
+            'bash /home/ubuntu/vlm-pipeline/scripts/startup.sh',
+            shell=True, capture_output=True, text=True, timeout=300,
+            env={**__import__('os').environ, 'HOME': '/root', 'PATH': '/usr/bin:/usr/local/bin:/bin'}
+        )
+        return {'returncode': result.returncode, 'stdout': result.stdout[-1000:], 'stderr': result.stderr[-500:]}
+    except Exception as e:
+        return JSONResponse({'error': str(e)}, status_code=500)
+

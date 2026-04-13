@@ -1,30 +1,24 @@
 FROM nvcr.io/nvidia/pytorch:24.10-py3
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    PYOPENGL_PLATFORM=egl \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+ENV DEBIAN_FRONTEND=noninteractive     PYOPENGL_PLATFORM=egl     PYTHONDONTWRITEBYTECODE=1     PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# System deps for pyrender EGL + ffmpeg + OpenCV
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1-mesa-glx libgles2-mesa-dev libegl1-mesa-dev \
-    libglib2.0-0 libsm6 libxrender1 libxext6 \
-    ffmpeg git curl cmake build-essential \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends     libgl1-mesa-glx libgles2-mesa-dev libegl1-mesa-dev     libglib2.0-0 libsm6 libxrender1 libxext6     ffmpeg git curl cmake build-essential     && rm -rf /var/lib/apt/lists/*
 
-# Python deps
+# Remove conflicting cv2 from base image
+RUN pip uninstall -y opencv-python opencv-python-headless opencv-contrib-python opencv 2>/dev/null;     find /usr/local/lib/python3.10/dist-packages/cv2 -delete 2>/dev/null; true
+
+# Install Kimodo + all its deps directly from the mounted source
+# We copy the requirements file at build time and install everything
+COPY kimodo_requirements.txt .
+RUN pip install --no-cache-dir -r kimodo_requirements.txt
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Kimodo (editable install from submodule mount)
-# Mounted at /kimodo via docker-compose volume
-RUN echo "Kimodo will be installed at runtime from /kimodo mount"
 
 COPY server.py .
 COPY render/ render/
 
 EXPOSE 9000
-
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "9000", "--workers", "1"]
+CMD uvicorn server:app --host 0.0.0.0 --port 9000 --workers 1

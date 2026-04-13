@@ -13,23 +13,22 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
       - PYOPENGL_PLATFORM=egl
       - COSMOS_REASON2_URL=http://host-gateway:${VLM_PORT:-30082}
+      - COSMOS_TRANSFER_URL=http://cosmos-transfer:8080
       - KIMODO_OUTPUT_DIR=/kimodo_output
       - RENDER_OUTPUT_DIR=/render_output
       - INSIGHTFACE_MODEL=/models/inswapper_128.onnx
       - HF_HOME=/hf_cache
     volumes:
-      # Kimodo submodule (editable install happens in entrypoint)
       - ../../kimodo:/kimodo:ro
-      # Shared caches
       - ${HF_CACHE:-/ephemeral/cache/huggingface}:/hf_cache
-      # InsightFace models
       - ~/.insightface:/root/.insightface
       - /tmp/insightface_models:/models:ro
-      # Motion files in/out
       - ${KIMODO_OUTPUT_DIR:-/home/ubuntu/kimodo_output}:/kimodo_output
       - ${RENDER_OUTPUT_DIR:-/tmp/render_output}:/render_output
     extra_hosts:
       - "host-gateway:host-gateway"
+    networks:
+      - vlm-net
     restart: on-failure
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
@@ -44,3 +43,7 @@ services:
             - driver: nvidia
               device_ids: ["${VSS_GPU_DEVICE:-0}"]
               capabilities: [gpu]
+
+networks:
+  vlm-net:
+    external: true
