@@ -1,124 +1,152 @@
-# VisionAI-Flywheel
+# VisionAI-Flywheel 🎬
 
-> **Synthetic → Real → Fine-Tune**  
-> End-to-end pipeline for generating annotated surveillance video training data for VLM fine-tuning.
+> Synthetic surveillance data pipeline — Kimodo motion synthesis → clothed mesh render → Cosmos-Transfer2.5 Sim2Real → NVIDIA VSS annotation
 
-![Synthetic VLM Studio](docs/screenshots/studio_ui.png)
-
-## Overview
-
-VisionAI-Flywheel is a data flywheel for surveillance AI:
-1. **Generate** — describe a scene in natural language → synthetic video via Kimodo + SOMA
-2. **Enhance** — optionally apply Cosmos-Transfer2.5 Sim2Real diffusion for photorealism
-3. **Annotate** — auto-annotate via NVIDIA VSS (VLM) + human correction
-4. **Fine-tune** — export curated (video, annotation) pairs for VLM training
-
-## Pipeline
+## Architecture
 
 ```
-Scene Prompt  (e.g. person pushing through a crowd and falling on a city street)
-     │
-     ▼
-[Kimodo]  Text → 3D Motion  (SOMA 77-joint skeleton, NPZ + BVH)
-     │
-     ▼
-[SOMA Render]  Clothed mesh video
-  · Clothing colors parsed from natural language  (e.g. grey shirt, dark trousers)
-  · Optional: face swap via InsightFace
-     │
-     ├── Cosmos Transfer OFF ──► clothed_render.mp4
-     │
-     └── Cosmos Transfer ON  ──► [Cosmos-Transfer2.5] Sim2Real diffusion
-                                   (Canny edge control, 2B model, GPU1)
-                                   └──► photorealistic.mp4
-     │
-     ▼
-[VSS / NVIDIA VLM]  Auto-annotation  →  VLMAnnotation DB
-  · Stores: video_filename, vss_response, user_annotation, tags, tuning_status
+Text prompt
+    │
+    ▼
+[Kimodo API]  ─── LLM2Vec + Llama-3-8B ──► NPZ/BVH motion
+    │
+    ▼
+[render-api]  ─── SOMA skinning + clothing ──► synthetic MP4
+    │
+    ▼
+[Cosmos-Transfer2.5]  ─── Sim2Real diffusion ──► photorealistic MP4
+    │
+    ▼
+[NVIDIA VSS]  ─── VLM annotation ──► fine-tuning dataset
 ```
 
-## Studio UI
+---
 
-The **Synthetic VLM Studio** is a web app for managing the full pipeline:
+## 🚀 Deploy on NVIDIA Brev
 
-| Tab | Description |
-|-----|-------------|
-| **Generate** | Scene prompt → motion → clothed render → VSS annotation |
-| **Monitor** | Live job logs + progress |
-| **Cosmos** | Side-by-side edge control vs. Sim2Real output |
-| **VSS** | Query VSS VLM directly |
-| **Dataset** | Browse annotated training pairs |
-| **Infra** | Docker container health status |
+### One-click deploy
+[![Deploy on Brev](https://brev.nvidia.com/assets/deploy-badge.svg)](https://brev.nvidia.com/launchable/deploy/now?launchableID=env-3AuTjTao5gelkXaCcUkXTRNbdyL)
 
-## Services
+### Requirements
+| Resource | Minimum | Recommended |
+|---|---|---|
+| GPU | 1× RTX 6000 Ada / A100 | 2× RTX PRO 6000 Blackwell |
+| VRAM | 48 GB | 96 GB (2×48) |
+| Disk | 300 GB | 500 GB |
+| RAM | 64 GB | 128 GB |
 
-| Service | Port | GPU | Description |
-|---------|------|-----|-------------|
-| VSS Agent | 8000 | shared | Video Search & Summarization chat API |
-| VST Ingress | 77770 | — | Video ingest + storage |
-| Nemotron-Nano-9B NIM | 30081 | GPU0 | LLM backbone for VSS |
-| Render API | 9000 | GPU0 | FastAPI: , , ,  |
-| Cosmos-Transfer2.5 | 8080 | GPU1 | Sim2Real video diffusion (Docker container) |
+### Environment Variables (set in Brev before deploying)
+| Variable | Description |
+|---|---|
+| `NGC_CLI_API_KEY` | NVIDIA NGC API key — [get it here](https://org.ngc.nvidia.com/setup) |
+| `HUGGINGFACE_TOKEN` | HuggingFace token for Llama-3-8B — [get it here](https://huggingface.co/settings/tokens) |
 
-> **Note:** Cosmos-Reason2-8B NIM is no longer required for clothing texture generation.
-> Color parsing is handled locally via keyword matching (no external API calls).
+### Brev setup script
+The Launchable uses `setup.sh` in the repo root. It:
+1. Configures Docker storage on the large disk
+2. Clones this repo + submodules
+3. Logs into NGC Docker registry
+4. Builds `render-api`, `kimodo-api`, `cosmos-transfer` images
+5. Pulls all VSS NIM images (~10 min)
+6. Installs a systemd service for **auto-start on every reboot**
+7. Starts the full stack
 
-## Hardware
+---
 
-- 2× NVIDIA RTX PRO 6000 Blackwell Server Edition (~102 GB VRAM each)
-- GPU0: VSS stack + Kimodo text-encoder + Render API
-- GPU1: Cosmos Transfer2.5 (persistent container)
+## Services & Ports
 
-## Quick Start
+| Service | Port | Description |
+|---|---|---|
+| VSS Agent (chat/query) | 8000 | VLM video Q&A |
+| VST (video upload) | 30888 | Video ingest |
+| render-api | 9000 | Motion → video pipeline |
+| Studio UI | 3000 | Web dashboard |
 
+**Brev tunnel URLs** (created automatically):
+- `https://8000-<instance>.brevlab.com` — VSS Agent
+- `https://9000-<instance>.brevlab.com` — render-api
+- `https://3000-<instance>.brevlab.com` — Studio UI
+
+---
+
+## Manual Usage
+
+### Start stack
 ```bash
-# 1. Clone with submodules
-git clone --recurse-submodules https://github.com/EyalEnav/VisionAI-Flywheel.git
-cd VisionAI-Flywheel
-
-# 2. Set environment secrets
-cp deployments/vss/env.rtxpro6000bw .env
-# Fill in: NGC_CLI_API_KEY, HF_TOKEN
-
-# 3. Create Docker network
-docker network create vlm-net
-
-# 4. Start VSS stack (NVIDIA MDX blueprint)
-cd deployments/vss
-docker compose --profile bp_developer_base_2d up -d
-
-# 5. Start Render API (Kimodo + SOMA rendering)
-cd ../../services/render-api
-docker compose up -d
-
-# 6. Build & start Cosmos Transfer (optional, GPU1)
-cd ../cosmos-transfer
-./build.sh        # builds cosmos-transfer:local image (~20 min first time)
-docker compose up -d
-
-# 7. Open Studio UI
-# https://kostya-app-309de312.base44.app
+bash scripts/start.sh
 ```
 
-## Dependencies & Credits
+### Stop stack
+```bash
+bash scripts/stop.sh
+```
 
-| Component | Source |
-|-----------|--------|
-| **NVIDIA VSS Blueprint 3.1** | [github.com/NVIDIA/video-search-and-summarization](https://github.com/NVIDIA/video-search-and-summarization) |
-| **Kimodo** (text → motion) | [github.com/NVlabs/Kimodo](https://github.com/NVlabs/Kimodo) |
-| **Cosmos-Transfer2.5** (Sim2Real) | [github.com/NVIDIA/Cosmos-Transfer2](https://github.com/NVIDIA/Cosmos-Transfer2) |
-| **SOMA** (mesh skinning) | NVlabs / SOMA |
-| **InsightFace** (face swap) | [github.com/deepinsight/insightface](https://github.com/deepinsight/insightface) |
+### Update to latest code + restart
+```bash
+bash scripts/update.sh
+```
+
+### Check status
+```bash
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+curl http://localhost:8000/health
+curl http://localhost:9000/health
+```
+
+---
+
+## Pipeline API
+
+### Generate synthetic video
+```bash
+curl -X POST http://localhost:9000/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "person running through crowd",
+    "clothing": "red jacket, blue jeans",
+    "texture_mode": "clothed",
+    "cosmos_sim2real": true
+  }'
+```
+
+### Upload video to VSS & query
+```bash
+# Upload
+curl -X POST http://localhost:8000/api/v1/videos \
+  -H "Content-Type: application/json" \
+  -d '{"filename": "myvideo.mp4"}'
+
+# Query  
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "describe video myvideo.mp4"}]}'
+```
+
+---
+
+## Repository Structure
+
+```
+VisionAI-Flywheel/
+├── setup.sh                      ← Brev Launchable entry point
+├── scripts/
+│   ├── start.sh                  ← Start all services
+│   ├── stop.sh                   ← Stop all services
+│   └── update.sh                 ← git pull + restart
+├── deployments/
+│   └── vss/
+│       ├── docker-compose.override.yml
+│       ├── env.rtxpro6000bw      ← GPU/port config
+│       └── nginx-extra.conf
+├── services/
+│   ├── render-api/               ← SOMA mesh rendering
+│   ├── kimodo-api/               ← Motion synthesis
+│   └── cosmos-transfer/          ← Sim2Real diffusion
+├── video-search-and-summarization/  ← VSS submodule
+└── helm/                         ← Kubernetes charts
+```
+
+---
 
 ## License
-
-This project is released under the [Apache 2.0 License](LICENSE).
-
-**Third-party components** retain their original licenses:
-- NVIDIA VSS Blueprint 3.1 — [NVIDIA License](https://github.com/NVIDIA/video-search-and-summarization/blob/main/LICENSE)
-- Cosmos-Transfer2 — [Apache 2.0 / NVIDIA Open Model License](https://github.com/NVIDIA/Cosmos-Transfer2/blob/main/LICENSE)
-- Kimodo — subject to NVlabs license terms
-
-> **Disclaimer:** This software is provided as is, without warranty of any kind, express or implied.  
-> The authors and contributors shall not be held liable for any direct, indirect, incidental, special, exemplary, or consequential damages arising from the use of this software.  
-> Use responsibly and in compliance with all applicable laws and the terms of all upstream NVIDIA repositories.
+Apache 2.0 — see [LICENSE](LICENSE)
