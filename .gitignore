@@ -1,39 +1,72 @@
-# Secrets
+# ─── Secrets & Keys ───────────────────────────────────────────────────────────
 .env
+.env.*
+!.env.example
 *.key
 *.pem
+*.p12
+*.pfx
+*.secret
+.flywheel.env
+secrets.json
+credentials.json
+ngc_api_key*
+hf_token*
 
-# Model caches & weights (too large for git)
+# ─── Model weights & caches ───────────────────────────────────────────────────
 *.onnx
 *.pt
 *.pth
 *.safetensors
 *.bin
+*.gguf
+*.pkl
 .cache/
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
 
-# Video output
-/tmp/
+# ─── Video, audio, images ─────────────────────────────────────────────────────
 *.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.tiff
+*.webp
+
+# ─── Motion & render output ───────────────────────────────────────────────────
 *.bvh
 *.npz
+*.npy
 kimodo_output/
 render_output/
+cosmos_output/
+/tmp/
 
-# Logs
+# ─── Logs ─────────────────────────────────────────────────────────────────────
 *.log
+logs/
 deploy_vss.log
 
-# OS
+# ─── OS & IDE ─────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
 
-# Submodule built artifacts
-kimodo/kimodo.egg-info/
-kimodo/kimodo/__pycache__/
-cosmos-transfer2.5/__pycache__/
-
-# Node
+# ─── Node ─────────────────────────────────────────────────────────────────────
 node_modules/
-!examples/*.json
+
+# ─── Submodule artifacts ──────────────────────────────────────────────────────
+video-search-and-summarization/
+kimodo/kimodo.egg-info/
+cosmos-transfer2.5/__pycache__/
