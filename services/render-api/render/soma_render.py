@@ -36,8 +36,13 @@ def _load_soma(npz_path):
     bind_verts = skin_npz["bind_vertices"]
 
     data = np.load(npz_path)
-    posed_joints    = torch.tensor(data["posed_joints"],    dtype=torch.float32)
-    global_rot_mats = torch.tensor(data["global_rot_mats"], dtype=torch.float32)
+    pj = data["posed_joints"]
+    gr = data["global_rot_mats"]
+    # squeeze batch dimension if present (1, T, J, 3) -> (T, J, 3)
+    if pj.ndim == 4: pj = pj[0]
+    if gr.ndim == 5: gr = gr[0]
+    posed_joints    = torch.tensor(pj, dtype=torch.float32)
+    global_rot_mats = torch.tensor(gr, dtype=torch.float32)
     min_y = posed_joints[:,:,1].min().item()
     posed_joints[:,:,1] -= min_y
 
