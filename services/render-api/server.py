@@ -430,3 +430,25 @@ def motion_preview(filename: str, max_frames: int = 60, step: int = 2):
         }
     except Exception as e:
         return JSONResponse({'error': str(e)}, status_code=500)
+
+# ─── Kimodo generate (direct, for Motion Library UI) ─────────────────────────
+class KimodoGenerateRequest(BaseModel):
+    prompt: str
+    output_filename: str | None = None
+    num_frames: int = 150
+
+@app.post("/kimodo/generate")
+async def kimodo_generate_direct(req: KimodoGenerateRequest):
+    """Proxy to kimodo-api /generate — used by Motion Library UI."""
+    import aiohttp
+    filename = req.output_filename or f"clip_{uuid.uuid4().hex[:8]}.npz"
+    payload  = {"prompt": req.prompt, "output_filename": filename, "num_frames": req.num_frames}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f"{KIMODO_API_URL}/generate", json=payload, timeout=aiohttp.ClientTimeout(total=300)) as resp:
+                body = await resp.json()
+                if resp.status != 200:
+                    raise RuntimeError(f"kimodo-api {resp.status}: {body}")
+        return {"ok": True, "filename": filename, "output_path": f"/kimodo_output/{filename}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

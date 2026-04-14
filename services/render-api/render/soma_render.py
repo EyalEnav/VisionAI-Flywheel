@@ -1,9 +1,12 @@
 """
-SOMA mesh renderer — shared by all texture modes.
+SOMA mesh renderer — Multi-character crowd support.
 texture_mode:
   "cosmos"   → colored clothing zones (colors dict required)
   "skeleton" → flat grey skeleton only (for Cosmos Transfer input)
   "faceswap" → cosmos colors + InsightFace identity swap on head
+
+crowd_extras: list of dicts:
+  { npz_path, colors, offset_x, offset_z, time_offset, scale }
 """
 import os, subprocess
 import numpy as np
@@ -13,6 +16,7 @@ import pyrender
 import cv2
 from PIL import Image, ImageDraw
 from datetime import datetime, timedelta
+import random
 
 KIMODO_PATH = os.environ.get("KIMODO_PATH", "/kimodo")
 SKEL_PATH   = f"{KIMODO_PATH}/kimodo/assets/skeletons/somaskel77"
@@ -71,7 +75,6 @@ def _vertex_colors_cosmos(bind_verts, colors):
 
 
 def _vertex_colors_skeleton(bind_verts):
-    """Flat grey skeleton for Cosmos Transfer input."""
     V = len(bind_verts)
     vc = np.full((V, 4), [80, 80, 90, 255], dtype=np.uint8)
     return vc
@@ -86,10 +89,75 @@ def _add_light(scene, d, c, i):
     scene.add(lgt, pose=p)
 
 
+# ─── Crowd palette pool ───────────────────────────────────────────
+CROWD_PALETTES = [
+    {"Torso":[220,50,50,255],  "Legs":[40,40,120,255],  "Shoes":[20,20,20,255],  "Socks":[240,240,240,255], "Belt":[30,20,10,255],  "Skin":[210,170,130,255], "Hair":[30,20,10,255]},
+    {"Torso":[50,120,220,255], "Legs":[80,80,80,255],   "Shoes":[50,30,10,255],  "Socks":[200,200,200,255], "Belt":[60,60,60,255],  "Skin":[240,200,160,255], "Hair":[80,50,20,255]},
+    {"Torso":[30,160,60,255],  "Legs":[20,20,80,255],   "Shoes":[30,30,30,255],  "Socks":[240,240,240,255], "Belt":[40,30,10,255],  "Skin":[180,130,90,255],  "Hair":[10,10,10,255]},
+    {"Torso":[200,200,50,255], "Legs":[60,30,10,255],   "Shoes":[20,20,20,255],  "Socks":[230,230,230,255], "Belt":[40,40,40,255],  "Skin":[255,220,180,255], "Hair":[180,140,80,255]},
+    {"Torso":[180,80,180,255], "Legs":[30,30,30,255],   "Shoes":[60,40,20,255],  "Socks":[240,240,240,255], "Belt":[50,50,50,255],  "Skin":[200,160,120,255], "Hair":[60,40,20,255]},
+    {"Torso":[240,120,30,255], "Legs":[50,50,100,255],  "Shoes":[25,25,25,255],  "Socks":[220,220,220,255], "Belt":[35,25,10,255],  "Skin":[160,110,70,255],  "Hair":[20,15,10,255]},
+    {"Torso":[60,60,60,255],   "Legs":[200,50,50,255],  "Shoes":[40,40,40,255],  "Socks":[200,200,200,255], "Belt":[30,30,30,255],  "Skin":[220,180,140,255], "Hair":[100,70,40,255]},
+    {"Torso":[255,255,255,255],"Legs":[100,100,100,255],"Shoes":[30,30,30,255],  "Socks":[230,230,230,255], "Belt":[50,50,50,255],  "Skin":[245,210,175,255], "Hair":[50,30,10,255]},
+]
+
+
+def _get_crowd_mesh(soma_skin, bind_verts, posed_joints, global_rot_mats,
+                    frame_idx, time_offset, offset_x, offset_z, colors, texture_mode):
+    """Return a trimesh for one extra character at a given frame."""
+    T = posed_joints.shape[0]
+    t = (frame_idx + time_offset) % T  # loop motion with time offset
+
+    verts_t  = soma_skin.skin(global_rot_mats[t:t+1], posed_joints[t:t+1], rot_is_global=True)
+    verts_np = verts_t[0].detach().numpy().copy()
+
+    # Apply XZ position offset (keep Y = ground-level)
+    verts_np[:, 0] += offset_x
+    verts_np[:, 2] += offset_z
+
+    # Random facing direction (yaw rotation around Y axis)
+    # Already encoded in npz, just offset position
+
+    if texture_mode == "skeleton":
+        vc = _vertex_colors_skeleton(bind_verts)
+    else:
+        vc = _vertex_colors_cosmos(bind_verts, colors)
+
+    mesh_tri = trimesh.Trimesh(vertices=verts_np, faces=soma_skin.faces.detach().numpy(), process=False)
+    mesh_tri.visual = trimesh.visual.ColorVisuals(mesh=mesh_tri, vertex_colors=vc)
+    return mesh_tri
+
+
 def render(npz_path, out_video, texture_mode="cosmos", colors=None,
-           face_path=None, fps=30, W=640, H=480):
+           face_path=None, fps=30, W=640, H=480,
+           crowd_extras=None):
+    """
+    crowd_extras: list of dicts with keys:
+        npz_path    - motion file for this extra
+        colors      - palette dict (or None → random from pool)
+        offset_x    - X world offset in meters
+        offset_z    - Z world offset in meters
+        time_offset - frame offset (int) for motion loop
+    """
     soma_skin, bind_verts, posed_joints, global_rot_mats = _load_soma(npz_path)
     T = posed_joints.shape[0]
+
+    # Pre-load all extras
+    extras_data = []
+    if crowd_extras:
+        for ex in crowd_extras:
+            ex_skin, ex_bverts, ex_pj, ex_grm = _load_soma(ex["npz_path"])
+            palette = ex.get("colors") or random.choice(CROWD_PALETTES)
+            extras_data.append({
+                "soma_skin": ex_skin,
+                "bind_verts": ex_bverts,
+                "posed_joints": ex_pj,
+                "global_rot_mats": ex_grm,
+                "colors": palette,
+                "offset_x": ex.get("offset_x", 0.0),
+                "offset_z": ex.get("offset_z", 0.0),
+                "time_offset": ex.get("time_offset", 0),
+            })
 
     if texture_mode == "skeleton":
         vertex_colors = _vertex_colors_skeleton(bind_verts)
@@ -118,27 +186,36 @@ def render(npz_path, out_video, texture_mode="cosmos", colors=None,
     camera   = pyrender.PerspectiveCamera(yfov=np.pi/3.5, aspectRatio=W/H)
 
     for i in range(T):
+        # ── Protagonist ──
         verts_t  = soma_skin.skin(global_rot_mats[i:i+1], posed_joints[i:i+1], rot_is_global=True)
         verts_np = verts_t[0].detach().numpy()
+        cx = verts_np[:,0].mean(); cz = verts_np[:,2].mean()
 
         mesh_tri = trimesh.Trimesh(vertices=verts_np, faces=soma_skin.faces.detach().numpy(), process=False)
         mesh_tri.visual = trimesh.visual.ColorVisuals(mesh=mesh_tri, vertex_colors=vertex_colors)
 
-        ground = trimesh.creation.box(extents=[5, 0.02, 5])
-        ground.apply_translation([0, -0.01, 0])
-        ground.visual = trimesh.visual.ColorVisuals(mesh=ground,
-            vertex_colors=np.tile([55,55,55,255], (len(ground.vertices),1)).astype(np.uint8))
-
+        # ── Scene (NO green ground quad — dark concrete floor) ──
         bg = [18, 18, 18, 255] if texture_mode != "skeleton" else [0, 0, 0, 255]
         scene = pyrender.Scene(ambient_light=[0.3,0.3,0.3], bg_color=bg)
         scene.add(pyrender.Mesh.from_trimesh(mesh_tri, smooth=True))
-        scene.add(pyrender.Mesh.from_trimesh(ground))
+
+        # ── Crowd extras ──
+        for ex in extras_data:
+            ex_mesh = _get_crowd_mesh(
+                ex["soma_skin"], ex["bind_verts"],
+                ex["posed_joints"], ex["global_rot_mats"],
+                i, ex["time_offset"],
+                ex["offset_x"], ex["offset_z"],
+                ex["colors"], texture_mode
+            )
+            scene.add(pyrender.Mesh.from_trimesh(ex_mesh, smooth=True))
+
+        # ── Lighting ──
         _add_light(scene, [-1,-2,-1], [1.0,0.95,0.85], 6.0)
         _add_light(scene, [ 1,-1, 1], [0.5,0.6, 0.8], 3.0)
         _add_light(scene, [ 0, 1, 0], [0.8,0.8, 1.0], 2.0)
 
-        # Surveillance camera
-        cx = verts_np[:,0].mean(); cz = verts_np[:,2].mean()
+        # ── Surveillance camera (fixed, high angle) ──
         cam_pos = np.array([cx+1.8, 4.8, cz+3.8])
         target  = np.array([cx, 0.9, cz])
         z_ax = cam_pos-target; z_ax /= np.linalg.norm(z_ax)
@@ -150,14 +227,14 @@ def render(npz_path, out_video, texture_mode="cosmos", colors=None,
         color_img, _ = renderer.render(scene)
         frame_bgr = cv2.cvtColor(color_img, cv2.COLOR_RGB2BGR)
 
-        # Face swap
+        # Face swap on protagonist only
         if texture_mode == "faceswap" and src_face and face_app:
             dst_faces = face_app.get(frame_bgr)
             if dst_faces:
                 dst = sorted(dst_faces, key=lambda x: x.bbox[2]*x.bbox[3], reverse=True)[0]
                 frame_bgr = swapper.get(frame_bgr, dst, src_face, paste_back=True)
 
-        # HUD overlay (skip for skeleton mode — clean input for Transfer)
+        # HUD overlay
         if texture_mode != "skeleton":
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             img  = Image.fromarray(frame_rgb)
@@ -183,6 +260,5 @@ def render(npz_path, out_video, texture_mode="cosmos", colors=None,
         out_video
     ], check=True, capture_output=True)
 
-    # Cleanup frames
     for f in os.listdir(out_dir): os.remove(os.path.join(out_dir, f))
     os.rmdir(out_dir)
