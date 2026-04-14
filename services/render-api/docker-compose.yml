@@ -28,6 +28,8 @@ services:
       - ${RENDER_OUTPUT_DIR:-/tmp/render_output}:/render_output
       - /var/run/docker.sock:/var/run/docker.sock
       - /usr/bin/docker:/usr/bin/docker:ro
+      - ./server.py:/app/server.py:ro
+      - ./render:/app/render:ro
     extra_hosts:
       - "host-gateway:host-gateway"
     networks:

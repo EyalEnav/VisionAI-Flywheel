@@ -14,8 +14,9 @@ from typing import Optional
 import numpy as np
 import torch
 import cv2
-from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
 # Kimodo is installed from the mounted submodule
