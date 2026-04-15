@@ -15,31 +15,29 @@ echo "=========================================="
 # These must be set as Brev environment variables before launching:
 #   NGC_CLI_API_KEY   — NVIDIA NGC API key  (required)
 #   HUGGINGFACE_TOKEN — HuggingFace token   (required for Llama-3-8B)
-# They are injected automatically by Brev if set in the Launchable config.
-
 : "${NGC_CLI_API_KEY:?ERROR: NGC_CLI_API_KEY env var not set}"
 : "${HUGGINGFACE_TOKEN:?ERROR: HUGGINGFACE_TOKEN env var not set}"
 
 # Persist secrets across reboots
 grep -q NGC_CLI_API_KEY ~/.bashrc 2>/dev/null || {
-  echo "export NGC_CLI_API_KEY=\"$NGC_CLI_API_KEY\""   >> ~/.bashrc
+  echo "export NGC_CLI_API_KEY=\"$NGC_CLI_API_KEY\""    >> ~/.bashrc
   echo "export HUGGINGFACE_TOKEN=\"$HUGGINGFACE_TOKEN\"" >> ~/.bashrc
 }
 
-# ── 1. Storage — use large attached disk ─────────────────────────────────────
+# ── 1. Storage — use large attached NVMe ─────────────────────────────────────
 NVME=/opt/dlami/nvme
 if mountpoint -q "$NVME"; then
   echo "✓ NVMe mounted at $NVME"
 else
-  # Fallback: use /data if exists, else root
   NVME=/home/ubuntu/data
   mkdir -p "$NVME"
 fi
 
 DOCKER_DATA="$NVME/docker"
-mkdir -p "$DOCKER_DATA"
+HF_CACHE="$NVME/hf_cache"
+mkdir -p "$DOCKER_DATA" "$HF_CACHE"
 
-# Configure Docker to use the large disk
+# Configure Docker to use the large disk + nvidia runtime
 if ! grep -q data-root /etc/docker/daemon.json 2>/dev/null; then
   sudo tee /etc/docker/daemon.json > /dev/null <<EOF
 {
@@ -68,57 +66,61 @@ else
   git clone https://github.com/EyalEnav/VisionAI-Flywheel.git "$REPO_DIR"
 fi
 cd "$REPO_DIR"
-
-# Pull VSS submodule
 git submodule update --init --recursive
 echo "✓ Repo ready at $REPO_DIR"
 
-# ── 3. NGC Docker login ──────────────────────────────────────────────────────
+# ── 3. Shared directories ────────────────────────────────────────────────────
+mkdir -p /home/ubuntu/kimodo_output
+mkdir -p /home/ubuntu/render_output
+echo "✓ Shared output dirs created"
+
+# ── 4. Create Docker network (shared by all services) ────────────────────────
+sudo docker network create vlm-net 2>/dev/null || echo "✓ vlm-net already exists"
+
+# ── 5. NGC Docker login ──────────────────────────────────────────────────────
 echo "$NGC_CLI_API_KEY" | sudo docker login nvcr.io \
   --username '$oauthtoken' --password-stdin
 echo "✓ NGC Docker login OK"
 
-# ── 4. Pull VSS images (background) ─────────────────────────────────────────
-echo "Pulling VSS images (this takes ~10 min)..."
+# ── 6. Pull VSS images (background — takes ~10 min) ──────────────────────────
+echo "Pulling VSS images in background..."
 cd "$REPO_DIR/video-search-and-summarization/deployments"
-
-set -a
-source "$REPO_DIR/deployments/vss/env.rtxpro6000bw"
-set +a
+set -a; source "$REPO_DIR/deployments/vss/env.rtxpro6000bw"; set +a
 
 sudo -E docker compose \
   -f compose.yml \
   -f "$REPO_DIR/deployments/vss/docker-compose.override.yml" \
   --profile bp_developer_base_2d \
   pull 2>&1 | tee /home/ubuntu/vss_pull.log &
-
 VSS_PULL_PID=$!
 
-# ── 5. Build render-api ───────────────────────────────────────────────────────
+# ── 7. Build render-api ───────────────────────────────────────────────────────
 echo "Building render-api..."
 cd "$REPO_DIR/services/render-api"
 sudo docker build -t render-api:local . 2>&1 | tee /home/ubuntu/render_build.log
 echo "✓ render-api built"
 
-# ── 6. Build kimodo-api ───────────────────────────────────────────────────────
-echo "Building kimodo-api..."
-cd "$REPO_DIR/services/kimodo-api"
+# ── 8. Build kimodo-api (context = kimodo submodule) ─────────────────────────
+echo "Building kimodo-api (this may take 5-10 min)..."
+cd "$REPO_DIR"
 sudo DOCKER_BUILDKIT=1 docker build \
   --build-arg HUGGINGFACE_TOKEN="$HUGGINGFACE_TOKEN" \
-  -t kimodo-api:local . 2>&1 | tee /home/ubuntu/kimodo_build.log
+  -f services/kimodo-api/Dockerfile \
+  -t kimodo-api:local \
+  kimodo/ 2>&1 | tee /home/ubuntu/kimodo_build.log
 echo "✓ kimodo-api built"
 
-# ── 7. Build cosmos-transfer ──────────────────────────────────────────────────
+# ── 9. Build cosmos-transfer ──────────────────────────────────────────────────
 echo "Building cosmos-transfer..."
 cd "$REPO_DIR/services/cosmos-transfer"
-sudo docker build -t cosmos-transfer:local . 2>&1 | tee /home/ubuntu/cosmos_build.log
+bash build.sh 2>&1 | tee /home/ubuntu/cosmos_build.log
 echo "✓ cosmos-transfer built"
 
-# ── 8. Wait for VSS pull ──────────────────────────────────────────────────────
-echo "Waiting for VSS image pull..."
+# ── 10. Wait for VSS pull ─────────────────────────────────────────────────────
+echo "Waiting for VSS image pull to complete..."
 wait $VSS_PULL_PID && echo "✓ VSS images pulled" || echo "⚠ VSS pull had errors — check /home/ubuntu/vss_pull.log"
 
-# ── 9. Install systemd service for auto-start on reboot ──────────────────────
+# ── 11. Install systemd service for auto-start on reboot ─────────────────────
 sudo tee /etc/systemd/system/vlm-flywheel.service > /dev/null <<'EOF'
 [Unit]
 Description=VisionAI-Flywheel stack
@@ -143,21 +145,25 @@ EOF
 cat > /home/ubuntu/.flywheel.env <<EOF
 NGC_CLI_API_KEY=$NGC_CLI_API_KEY
 HUGGINGFACE_TOKEN=$HUGGINGFACE_TOKEN
+HF_CACHE=$HF_CACHE
+HF_TOKEN=$HUGGINGFACE_TOKEN
 EOF
 chmod 600 /home/ubuntu/.flywheel.env
 
 sudo systemctl daemon-reload
 sudo systemctl enable vlm-flywheel.service
-echo "✓ systemd service installed"
+echo "✓ systemd service installed and enabled"
 
-# ── 10. First start ───────────────────────────────────────────────────────────
-echo "Starting stack..."
+# ── 12. First start ───────────────────────────────────────────────────────────
+echo "Starting full stack..."
 bash /home/ubuntu/vlm-pipeline/scripts/start.sh
 
 echo ""
 echo "=========================================="
 echo " ✅ Setup complete — $(date)"
-echo "   render-api : http://localhost:9000"
-echo "   VSS agent  : http://localhost:8000"
-echo "   Studio UI  : http://localhost:3000"
+echo "   render-api  : http://localhost:9001"
+echo "   kimodo-api  : http://localhost:9551"
+echo "   cosmos-api  : http://localhost:8080"
+echo "   VSS agent   : http://localhost:8000"
+echo "   Studio UI   : http://$(curl -s ifconfig.me):9000"
 echo "=========================================="
