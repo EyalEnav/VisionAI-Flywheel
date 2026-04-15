@@ -64,16 +64,32 @@ def health():
 
 
 @app.get("/status")
-def status():
+async def status():
+    from render.vlm_analyze import vllm_health, AVAILABLE_BACKENDS
     motions = [p.name for p in KIMODO_OUTPUT_DIR.glob("*.npz")]
+    vllm_info = await vllm_health()
     return {
         "ok": True,
         "gpus": get_gpu_info(),
         "motions_available": motions,
         "jobs_active": sum(1 for j in JOBS.values() if j["status"] == "running"),
         "vlm_backend": VLM_BACKEND,
-        "vlm_backends_available": ["vss", "qwen", "qwen7b", "openai", "nim"],
+        "vlm_backends_available": AVAILABLE_BACKENDS,
+        "vllm": vllm_info,
     }
+
+
+@app.get("/vllm/health")
+async def vllm_health_endpoint():
+    from render.vlm_analyze import vllm_health
+    return await vllm_health()
+
+
+@app.get("/vllm/models")
+async def vllm_models():
+    from render.vlm_analyze import list_vllm_models
+    models = await list_vllm_models()
+    return {"models": models}
 
 
 # ─── Generate endpoint ────────────────────────────────────────────────────────

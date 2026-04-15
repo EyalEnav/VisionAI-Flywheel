@@ -23,6 +23,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - NIM_URL=${NIM_URL:-}
       - NIM_MODEL=${NIM_MODEL:-}
+      - VLLM_URL=http://host-gateway:${VLLM_PORT:-8090}
+      - VLLM_MODEL=${VLLM_MODEL:-vllm-local}
     volumes:
       # Kimodo submodule (editable install happens in entrypoint)
       - ../../kimodo:/kimodo:ro

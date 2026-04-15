@@ -1,34 +1,39 @@
 """
 vlm_analyze.py — Video → VLM analysis with pluggable backends
 
-Supported backends (set via VLM_BACKEND env var):
-  - "vss"       NVIDIA VSS Agent (default) — http://localhost:8000
-  - "qwen"      Qwen2.5-VL-2B-Instruct   — local HuggingFace (GPU0)
-  - "qwen7b"    Qwen2.5-VL-7B-Instruct   — local HuggingFace (GPU0)
-  - "openai"    GPT-4o / GPT-4-vision     — OpenAI API
-  - "nim"       Any NVIDIA NIM endpoint   — custom URL
+Supported backends (set via VLM_BACKEND env var or per-call override):
+  "vss"     NVIDIA VSS Agent (default)          — http://localhost:8000
+  "vllm"    vLLM OpenAI-compatible server       — http://localhost:8090  (NGC nvcr.io/nvidia/vllm)
+  "qwen"    Qwen2.5-VL-2B-Instruct in-process   — local HuggingFace GPU
+  "qwen7b"  Qwen2.5-VL-7B-Instruct in-process   — local HuggingFace GPU
+  "openai"  GPT-4o / GPT-4-vision               — OpenAI API
+  "nim"     Any OpenAI-compatible NIM endpoint  — custom NIM_URL
 
 Usage:
-  from render.vlm_analyze import analyze_video
-  result = await analyze_video("/path/to/video.mp4", prompt="Describe this surveillance footage")
+  from render.vlm_analyze import analyze_video, list_vllm_models
+  result = await analyze_video("/path/to/video.mp4", backend="vllm")
+  models = await list_vllm_models()   # → ["Qwen/Qwen2.5-VL-2B-Instruct", ...]
 """
 
 import os
 import asyncio
 import base64
-import tempfile
 import httpx
 from pathlib import Path
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-VLM_BACKEND      = os.environ.get("VLM_BACKEND", "vss")        # vss | qwen | qwen7b | openai | nim
+VLM_BACKEND      = os.environ.get("VLM_BACKEND", "vss")
 VSS_URL          = os.environ.get("VSS_URL", "http://localhost:8000")
+VLLM_URL         = os.environ.get("VLLM_URL", "http://localhost:8090")
+VLLM_MODEL       = os.environ.get("VLLM_MODEL", "vllm-local")   # served-model-name in vLLM
 OPENAI_API_KEY   = os.environ.get("OPENAI_API_KEY", "")
 NIM_URL          = os.environ.get("NIM_URL", "")
 NIM_MODEL        = os.environ.get("NIM_MODEL", "")
 HF_HOME          = os.environ.get("HF_HOME", "/hf_cache")
 
-# Lazy-loaded Qwen model (loaded once, reused across calls)
+AVAILABLE_BACKENDS = ["vss", "vllm", "qwen", "qwen7b", "openai", "nim"]
+
+# Lazy-loaded in-process Qwen model
 _qwen_model      = None
 _qwen_processor  = None
 _qwen_model_id   = None
@@ -40,7 +45,10 @@ _qwen_model_id   = None
 
 async def analyze_video(
     video_path: str,
-    prompt: str = "Describe this surveillance footage in detail. Identify any suspicious activity, people, vehicles, or events.",
+    prompt: str = (
+        "Describe this surveillance footage in detail. "
+        "Identify any suspicious activity, people, vehicles, or events."
+    ),
     backend: str | None = None,
     max_frames: int = 16,
 ) -> dict:
@@ -61,17 +69,24 @@ async def analyze_video(
     try:
         if backend == "vss":
             result = await _analyze_vss(video_path, prompt)
+        elif backend == "vllm":
+            result = await _analyze_vllm(video_path, prompt, max_frames)
         elif backend in ("qwen", "qwen7b"):
-            model_id = "Qwen/Qwen2.5-VL-7B-Instruct" if backend == "qwen7b" else "Qwen/Qwen2.5-VL-2B-Instruct"
+            model_id = (
+                "Qwen/Qwen2.5-VL-7B-Instruct"
+                if backend == "qwen7b"
+                else "Qwen/Qwen2.5-VL-2B-Instruct"
+            )
             result = await asyncio.get_event_loop().run_in_executor(
-                None, _analyze_qwen, video_path, prompt, model_id, max_frames
+                None, _analyze_qwen_local, video_path, prompt, model_id, max_frames
             )
         elif backend == "openai":
             result = await _analyze_openai(video_path, prompt, max_frames)
         elif backend == "nim":
             result = await _analyze_nim(video_path, prompt, max_frames)
         else:
-            raise ValueError(f"Unknown VLM backend: {backend}")
+            raise ValueError(f"Unknown VLM backend: '{backend}'. "
+                             f"Available: {AVAILABLE_BACKENDS}")
 
         result["backend"] = backend
         return result
@@ -82,8 +97,88 @@ async def analyze_video(
             "response": None,
             "model": None,
             "frames_used": 0,
-            "error": str(e)
+            "error": str(e),
         }
+
+
+async def list_vllm_models() -> list[str]:
+    """
+    Query the running vLLM server for loaded models.
+    Returns [] if vLLM is not running.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{VLLM_URL}/v1/models")
+            data = resp.json()
+        return [m["id"] for m in data.get("data", [])]
+    except Exception:
+        return []
+
+
+async def vllm_health() -> dict:
+    """Return vLLM server health info."""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{VLLM_URL}/health")
+        models = await list_vllm_models()
+        return {"ok": resp.status_code == 200, "models": models}
+    except Exception as e:
+        return {"ok": False, "models": [], "error": str(e)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Backend: vLLM (NGC nvcr.io/nvidia/vllm — OpenAI-compatible)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _analyze_vllm(video_path: str, prompt: str, max_frames: int) -> dict:
+    """
+    Send video frames to a locally running vLLM server.
+    vLLM serves an OpenAI-compatible /v1/chat/completions endpoint.
+    Supports any vision model loaded in vLLM (Qwen2.5-VL, LLaVA, InternVL, etc.)
+    """
+    frames_b64 = _extract_frames_b64(video_path, max_frames)
+
+    # Build content: interleave frames + text prompt
+    content = []
+    for f_b64 in frames_b64:
+        content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{f_b64}",
+                "detail": "low",
+            }
+        })
+    content.append({"type": "text", "text": prompt})
+
+    # Get actual model name from server (or fall back to env var)
+    models = await list_vllm_models()
+    model_name = models[0] if models else VLLM_MODEL
+
+    async with httpx.AsyncClient(timeout=180) as client:
+        resp = await client.post(
+            f"{VLLM_URL}/v1/chat/completions",
+            json={
+                "model": model_name,
+                "messages": [{"role": "user", "content": content}],
+                "max_tokens": 512,
+                "temperature": 0.3,
+            }
+        )
+        data = resp.json()
+
+    if "error" in data:
+        raise RuntimeError(data["error"])
+
+    answer = data["choices"][0]["message"]["content"]
+    usage  = data.get("usage", {})
+
+    return {
+        "response": answer,
+        "model": model_name,
+        "frames_used": len(frames_b64),
+        "usage": usage,
+        "error": None,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -91,48 +186,47 @@ async def analyze_video(
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def _analyze_vss(video_path: str, prompt: str) -> dict:
-    """
-    Upload video to VSS, then query the agent.
-    Requires VSS running at VSS_URL (default :8000).
-    """
     import shutil
 
-    # Step 1: copy video to VSS clip storage
-    vss_storage = Path("/home/ubuntu/video-search-and-summarization/deployments/data-dir"
-                       "/data_log/vst/clip_storage")
+    vss_storage = Path(
+        "/home/ubuntu/video-search-and-summarization/deployments"
+        "/data-dir/data_log/vst/clip_storage"
+    )
     vss_storage.mkdir(parents=True, exist_ok=True)
 
     fname = Path(video_path).name
-    dest  = vss_storage / fname
-    shutil.copy2(video_path, dest)
-
-    # Step 2: trigger VSS upload via MCP (best-effort)
-    # The file presence is often enough; alternatively poll /sensors
+    shutil.copy2(video_path, vss_storage / fname)
     await asyncio.sleep(2)
 
-    # Step 3: query VSS chat agent
     async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(
             f"{VSS_URL}/api/chat/completions",
             json={
                 "messages": [{"role": "user", "content": prompt}],
-                "use_knowledge_base": False
+                "use_knowledge_base": False,
             }
         )
         data = resp.json()
 
     answer = data.get("choices", [{}])[0].get("message", {}).get("content", str(data))
-    return {"response": answer, "model": "nvidia/vss-agent", "frames_used": -1, "error": None}
+    return {
+        "response": answer,
+        "model": "nvidia/vss-agent",
+        "frames_used": -1,
+        "error": None,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Backend: Qwen2.5-VL (local HuggingFace)
+# Backend: Qwen2.5-VL in-process (HuggingFace)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _analyze_qwen(video_path: str, prompt: str, model_id: str, max_frames: int) -> dict:
+def _analyze_qwen_local(
+    video_path: str, prompt: str, model_id: str, max_frames: int
+) -> dict:
     """
-    Run Qwen2.5-VL locally. Loads model lazily (stays in VRAM between calls).
-    Requires: pip install qwen-vl-utils transformers torch
+    Run Qwen2.5-VL in-process. Model stays in VRAM between calls (lazy load).
+    Slower first call, fast subsequent calls.
     """
     global _qwen_model, _qwen_processor, _qwen_model_id
 
@@ -140,9 +234,8 @@ def _analyze_qwen(video_path: str, prompt: str, model_id: str, max_frames: int) 
     from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
     from qwen_vl_utils import process_vision_info
 
-    # Load model if needed (or if backend changed)
     if _qwen_model is None or _qwen_model_id != model_id:
-        print(f"[vlm_analyze] Loading {model_id}...")
+        print(f"[vlm_analyze] Loading {model_id}…")
         _qwen_processor = AutoProcessor.from_pretrained(model_id, cache_dir=HF_HOME)
         _qwen_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             model_id,
@@ -152,23 +245,15 @@ def _analyze_qwen(video_path: str, prompt: str, model_id: str, max_frames: int) 
         )
         _qwen_model.eval()
         _qwen_model_id = model_id
-        print(f"[vlm_analyze] {model_id} loaded ✓")
+        print(f"[vlm_analyze] {model_id} ready ✓")
 
-    # Extract frames as base64
     frames_b64 = _extract_frames_b64(video_path, max_frames)
-    frames_used = len(frames_b64)
-
-    # Build message with video frames as images
-    content = []
-    for f_b64 in frames_b64:
-        content.append({
-            "type": "image",
-            "image": f"data:image/jpeg;base64,{f_b64}"
-        })
-    content.append({"type": "text", "text": prompt})
+    content = [
+        {"type": "image", "image": f"data:image/jpeg;base64,{f}"}
+        for f in frames_b64
+    ] + [{"type": "text", "text": prompt}]
 
     messages = [{"role": "user", "content": content}]
-
     text = _qwen_processor.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
@@ -182,28 +267,23 @@ def _analyze_qwen(video_path: str, prompt: str, model_id: str, max_frames: int) 
     ).to(_qwen_model.device)
 
     with torch.inference_mode():
-        generated_ids = _qwen_model.generate(
-            **inputs,
-            max_new_tokens=512,
-            temperature=0.3,
-            do_sample=True,
+        gen_ids = _qwen_model.generate(
+            **inputs, max_new_tokens=512, temperature=0.3, do_sample=True
         )
 
-    generated_ids_trimmed = [
-        out_ids[len(in_ids):]
-        for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+    trimmed = [
+        out[len(inp):]
+        for inp, out in zip(inputs.input_ids, gen_ids)
     ]
     response = _qwen_processor.batch_decode(
-        generated_ids_trimmed,
-        skip_special_tokens=True,
-        clean_up_tokenization_spaces=False
+        trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
     )[0]
 
     return {
         "response": response,
         "model": model_id,
-        "frames_used": frames_used,
-        "error": None
+        "frames_used": len(frames_b64),
+        "error": None,
     }
 
 
@@ -213,13 +293,16 @@ def _analyze_qwen(video_path: str, prompt: str, model_id: str, max_frames: int) 
 
 async def _analyze_openai(video_path: str, prompt: str, max_frames: int) -> dict:
     frames_b64 = _extract_frames_b64(video_path, max_frames)
-    content = []
-    for f_b64 in frames_b64:
-        content.append({
+    content = [
+        {
             "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{f_b64}", "detail": "low"}
-        })
-    content.append({"type": "text", "text": prompt})
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{f}",
+                "detail": "low",
+            },
+        }
+        for f in frames_b64
+    ] + [{"type": "text", "text": prompt}]
 
     async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(
@@ -228,58 +311,60 @@ async def _analyze_openai(video_path: str, prompt: str, max_frames: int) -> dict
             json={
                 "model": "gpt-4o",
                 "messages": [{"role": "user", "content": content}],
-                "max_tokens": 512
-            }
+                "max_tokens": 512,
+            },
         )
         data = resp.json()
 
     answer = data["choices"][0]["message"]["content"]
-    return {"response": answer, "model": "gpt-4o", "frames_used": len(frames_b64), "error": None}
+    return {
+        "response": answer,
+        "model": "gpt-4o",
+        "frames_used": len(frames_b64),
+        "error": None,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Backend: NVIDIA NIM (generic OpenAI-compatible endpoint)
+# Backend: NVIDIA NIM (generic OpenAI-compatible)
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def _analyze_nim(video_path: str, prompt: str, max_frames: int) -> dict:
-    """
-    Any OpenAI-compatible NIM endpoint.
-    Set NIM_URL and NIM_MODEL env vars.
-    """
     frames_b64 = _extract_frames_b64(video_path, max_frames)
-    content = []
-    for f_b64 in frames_b64:
-        content.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{f_b64}"}
-        })
-    content.append({"type": "text", "text": prompt})
+    content = [
+        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{f}"}}
+        for f in frames_b64
+    ] + [{"type": "text", "text": prompt}]
 
     async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(
             f"{NIM_URL}/v1/chat/completions",
-            headers={"Authorization": f"Bearer {os.environ.get('NGC_CLI_API_KEY', '')}"},
+            headers={
+                "Authorization": f"Bearer {os.environ.get('NGC_CLI_API_KEY', '')}",
+            },
             json={
                 "model": NIM_MODEL,
                 "messages": [{"role": "user", "content": content}],
-                "max_tokens": 512
-            }
+                "max_tokens": 512,
+            },
         )
         data = resp.json()
 
     answer = data["choices"][0]["message"]["content"]
-    return {"response": answer, "model": NIM_MODEL, "frames_used": len(frames_b64), "error": None}
+    return {
+        "response": answer,
+        "model": NIM_MODEL,
+        "frames_used": len(frames_b64),
+        "error": None,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Frame extraction helper
+# Frame extraction
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _extract_frames_b64(video_path: str, max_frames: int = 16) -> list[str]:
-    """
-    Extract up to max_frames evenly spaced frames from a video.
-    Returns list of base64-encoded JPEG strings.
-    """
+    """Extract up to max_frames evenly spaced frames → list of base64 JPEG strings."""
     import cv2
 
     cap = cv2.VideoCapture(video_path)
@@ -296,7 +381,6 @@ def _extract_frames_b64(video_path: str, max_frames: int = 16) -> list[str]:
         ret, frame = cap.read()
         if not ret:
             continue
-        # Resize to 640×360 max for efficiency
         h, w = frame.shape[:2]
         if w > 640:
             scale = 640 / w

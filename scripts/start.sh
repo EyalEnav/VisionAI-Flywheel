@@ -65,6 +65,23 @@ HF_TOKEN="${HUGGINGFACE_TOKEN:-}" \
   docker compose up -d
 echo "✓ cosmos-transfer started on :8080"
 
+# ── 5. vLLM (optional — GPU0 shared, port 8090) ──────────────────────────────
+# Set VLLM_ENABLED=1 to start automatically; otherwise start manually with:
+#   cd $REPO_DIR/services/vllm && VLLM_MODEL=Qwen/Qwen2.5-VL-2B-Instruct docker compose up -d
+if [ "${VLLM_ENABLED:-0}" = "1" ]; then
+  echo "Starting vLLM..."
+  cd "$REPO_DIR/services/vllm"
+  VLLM_GPU_DEVICE="${VLLM_GPU_DEVICE:-0}" \
+  VLLM_MODEL="${VLLM_MODEL:-Qwen/Qwen2.5-VL-2B-Instruct}" \
+  VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.30}" \
+  HF_CACHE="${HF_CACHE:-/opt/dlami/nvme/hf_cache}" \
+  HUGGINGFACE_TOKEN="${HUGGINGFACE_TOKEN:-}" \
+    docker compose up -d
+  echo "✓ vLLM started on :8090 (model: ${VLLM_MODEL:-Qwen/Qwen2.5-VL-2B-Instruct})"
+else
+  echo "ℹ vLLM not auto-started (set VLLM_ENABLED=1 to enable)"
+fi
+
 # ── Health check: VSS ────────────────────────────────────────────────────────
 echo "Waiting for VSS agent to be ready (can take 3-5 min)..."
 for i in $(seq 1 60); do

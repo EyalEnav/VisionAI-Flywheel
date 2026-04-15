@@ -8,6 +8,10 @@ exec > >(tee -a "$LOG") 2>&1
 
 echo "=== Stopping VisionAI-Flywheel — $(date) ==="
 
+# vLLM (optional)
+cd "$REPO_DIR/services/vllm" && docker compose down 2>/dev/null || true
+echo "✓ vLLM stopped"
+
 # cosmos-transfer
 cd "$REPO_DIR/services/cosmos-transfer" && docker compose down 2>/dev/null || true
 echo "✓ cosmos-transfer stopped"
