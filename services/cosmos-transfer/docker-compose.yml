@@ -10,12 +10,13 @@ services:
       - NVIDIA_VISIBLE_DEVICES=${TRANSFER_GPU_DEVICE:-1}
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - HF_HOME=/hf_cache
-      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
     volumes:
       - /home/ubuntu/vlm-pipeline/cosmos-transfer2.5:/workspace
       - /home/ubuntu/vlm-pipeline/services/cosmos-transfer/cosmos_api.py:/cosmos_api.py:ro
       - ${HF_CACHE:-/opt/dlami/nvme/hf_cache}:/hf_cache
       - /tmp:/tmp
+      - /home/ubuntu/render_output:/render_output
     networks:
       - vlm-net
     deploy:

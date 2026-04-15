@@ -28,7 +28,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 # ─── Job store ────────────────────────────────────────────────────────────────
 JOBS: dict[str, dict] = {}
 KIMODO_OUTPUT_DIR = Path(os.environ.get("KIMODO_OUTPUT_DIR", "/kimodo_output"))
-RENDER_OUTPUT_DIR = Path(os.environ.get("RENDER_OUTPUT_DIR", "/tmp/render_output"))
+RENDER_OUTPUT_DIR = Path(os.environ.get("RENDER_OUTPUT_DIR", "/render_output"))
 RENDER_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 COSMOS_REASON2_URL   = os.environ.get("COSMOS_REASON2_URL",   "http://localhost:30082")
@@ -83,6 +83,7 @@ async def generate(
     width: int = Form(640),
     height: int = Form(480),
     face_image: Optional[UploadFile] = File(None),
+    cosmos_transfer: str = Form("false"),   # "true" to run Sim2Real after render
 ):
     job_id = str(uuid.uuid4())
     face_path = None
@@ -99,16 +100,17 @@ async def generate(
 
     npz_path = str(KIMODO_OUTPUT_DIR / motion_file) if motion_file else None
 
+    do_cosmos = cosmos_transfer.lower() in ("true", "1", "yes")
     background_tasks.add_task(
         run_render_job, job_id, prompt,
         cosmos_prompt or prompt,   # use unified prompt for texture if no separate one
-        texture_mode, npz_path, face_path, fps, width, height
+        texture_mode, npz_path, face_path, fps, width, height, do_cosmos
     )
     return {"job_id": job_id}
 
 
 async def run_render_job(job_id, prompt, texture_prompt, texture_mode,
-                          npz_path, face_path, fps, W, H):
+                          npz_path, face_path, fps, W, H, do_cosmos=False):
     job = JOBS[job_id]
     try:
         job["status"] = "running"
@@ -146,7 +148,7 @@ async def run_render_job(job_id, prompt, texture_prompt, texture_mode,
         )
 
         # 4. Optional: Cosmos Transfer2.5 Sim2Real
-        if texture_mode == "transfer":
+        if do_cosmos or texture_mode == "transfer":
             job["log"].append("Running Cosmos Transfer2.5 Sim2Real...")
             job["progress"] = 70
             out_video = await run_cosmos_transfer(job_id, out_video, texture_prompt)
@@ -171,17 +173,23 @@ async def generate_kimodo_motion(job_id, prompt):
     out_npz = str(RENDER_OUTPUT_DIR / f"{job_id}_motion.npz")
     filename = f"{job_id}_motion.npz"
     payload = {"prompt": prompt, "output_filename": filename}
-    timeout = aiohttp.ClientTimeout(total=600)
+    timeout = aiohttp.ClientTimeout(total=1800)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.post(f"{KIMODO_API_URL}/generate", json=payload) as resp:
             if resp.status != 200:
                 body = await resp.text()
                 raise RuntimeError(f"kimodo-api HTTP {resp.status}: {body[:300]}")
             data = await resp.json()
-    # File is written into shared /kimodo_output volume
-    # kimodo-api writes to its /kimodo_output, we read from RENDER_OUTPUT_DIR which maps same host path
-    # Return path in our filesystem
-    return str(RENDER_OUTPUT_DIR / filename)
+    # kimodo-api writes to /kimodo_output volume; we must read from KIMODO_OUTPUT_DIR
+    import time
+    kimodo_path = KIMODO_OUTPUT_DIR / filename
+    for _ in range(20):
+        if kimodo_path.exists():
+            break
+        time.sleep(0.5)
+    if not kimodo_path.exists():
+        raise RuntimeError(f'Motion file not found in kimodo_output: {filename}')
+    return str(kimodo_path)
 
 
 async def run_cosmos_transfer(job_id: str, input_video: str, prompt: str) -> str:
@@ -194,14 +202,14 @@ async def run_cosmos_transfer(job_id: str, input_video: str, prompt: str) -> str
         "prompt":      prompt,
         "control_weight": 1.0
     }
-    async with httpx.AsyncClient(timeout=600) as client:
+    async with httpx.AsyncClient(timeout=1800) as client:
         # Start job
         resp = await client.post(f"{COSMOS_TRANSFER_URL}/transfer", json=payload)
         resp.raise_for_status()
         transfer_job_id = resp.json()["job_id"]
         # Poll until done
         import asyncio as _aio
-        for _ in range(200):
+        for _ in range(600):
             await _aio.sleep(3)
             poll = await client.get(f"{COSMOS_TRANSFER_URL}/jobs/{transfer_job_id}")
             state = poll.json()
@@ -209,7 +217,7 @@ async def run_cosmos_transfer(job_id: str, input_video: str, prompt: str) -> str
                 return output_video
             if state["status"] == "error":
                 raise RuntimeError("Cosmos Transfer failed: " + str(state.get("error")))
-        raise TimeoutError("Cosmos Transfer timed out after 600s")
+        raise TimeoutError("Cosmos Transfer timed out after 1800s")
 
 
 async def get_cosmos_texture(prompt):
