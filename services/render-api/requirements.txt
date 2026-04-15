@@ -1,16 +1,18 @@
 fastapi>=0.110.0
 uvicorn[standard]>=0.29.0
 python-multipart
-numpy==1.26.4
+numpy
+torch
 trimesh
 pyrender
-opencv-python-headless==4.9.0.80
+opencv-python-headless
 Pillow
 mediapipe
 insightface
 onnxruntime-gpu
 aiofiles
 httpx
-peft
-viser
-aiohttp
+# VLM analysis
+qwen-vl-utils
+transformers>=4.45.0
+accelerate
