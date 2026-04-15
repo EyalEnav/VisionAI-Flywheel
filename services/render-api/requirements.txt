@@ -12,7 +12,11 @@ insightface
 onnxruntime-gpu
 aiofiles
 httpx
-# VLM analysis
+# VLM analysis backends
 qwen-vl-utils
+# Qwen3-VL requires transformers >= 4.57 (not yet on PyPI, install from git)
+# pip install git+https://github.com/huggingface/transformers
+# For Qwen2.5-VL (fallback): transformers>=4.45.0
 transformers>=4.45.0
 accelerate
+flash-attn  # recommended for Qwen3-VL speed

@@ -4,6 +4,7 @@ vlm_analyze.py — Video → VLM analysis with pluggable backends
 Supported backends (set via VLM_BACKEND env var or per-call override):
   "vss"     NVIDIA VSS Agent (default)          — http://localhost:8000
   "vllm"    vLLM OpenAI-compatible server       — http://localhost:8090  (NGC nvcr.io/nvidia/vllm)
+  "qwen3"   Qwen3-VL-2B-Instruct in-process     — local HuggingFace GPU (recommended)
   "qwen"    Qwen2.5-VL-2B-Instruct in-process   — local HuggingFace GPU
   "qwen7b"  Qwen2.5-VL-7B-Instruct in-process   — local HuggingFace GPU
   "openai"  GPT-4o / GPT-4-vision               — OpenAI API
@@ -31,7 +32,7 @@ NIM_URL          = os.environ.get("NIM_URL", "")
 NIM_MODEL        = os.environ.get("NIM_MODEL", "")
 HF_HOME          = os.environ.get("HF_HOME", "/hf_cache")
 
-AVAILABLE_BACKENDS = ["vss", "vllm", "qwen", "qwen7b", "openai", "nim"]
+AVAILABLE_BACKENDS = ["vss", "vllm", "qwen3", "qwen", "qwen7b", "openai", "nim"]
 
 # Lazy-loaded in-process Qwen model
 _qwen_model      = None
@@ -71,6 +72,11 @@ async def analyze_video(
             result = await _analyze_vss(video_path, prompt)
         elif backend == "vllm":
             result = await _analyze_vllm(video_path, prompt, max_frames)
+        elif backend == "qwen3":
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, _analyze_qwen3, video_path, prompt,
+                "Qwen/Qwen3-VL-2B-Instruct", max_frames
+            )
         elif backend in ("qwen", "qwen7b"):
             model_id = (
                 "Qwen/Qwen2.5-VL-7B-Instruct"
@@ -213,6 +219,83 @@ async def _analyze_vss(video_path: str, prompt: str) -> dict:
         "response": answer,
         "model": "nvidia/vss-agent",
         "frames_used": -1,
+        "error": None,
+    }
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Backend: Qwen3-VL-2B-Instruct (in-process HuggingFace)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Separate lazy cache for Qwen3
+_qwen3_model     = None
+_qwen3_processor = None
+
+def _analyze_qwen3(
+    video_path: str, prompt: str, model_id: str, max_frames: int
+) -> dict:
+    """
+    Run Qwen3-VL in-process. Uses new Qwen3VLForConditionalGeneration class.
+    Requires: pip install git+https://github.com/huggingface/transformers
+    (transformers >= 4.57 not yet on PyPI as of May 2025)
+    """
+    global _qwen3_model, _qwen3_processor
+
+    import torch
+    from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
+    from qwen_vl_utils import process_vision_info
+
+    if _qwen3_model is None:
+        print(f"[vlm_analyze] Loading {model_id}…")
+        _qwen3_processor = AutoProcessor.from_pretrained(model_id, cache_dir=HF_HOME)
+        _qwen3_model = Qwen3VLForConditionalGeneration.from_pretrained(
+            model_id,
+            torch_dtype=torch.bfloat16,
+            attn_implementation="flash_attention_2",  # recommended by Qwen team
+            device_map="auto",
+            cache_dir=HF_HOME,
+        )
+        _qwen3_model.eval()
+        print(f"[vlm_analyze] {model_id} ready ✓")
+
+    frames_b64 = _extract_frames_b64(video_path, max_frames)
+    content = [
+        {"type": "image", "image": f"data:image/jpeg;base64,{f}"}
+        for f in frames_b64
+    ] + [{"type": "text", "text": prompt}]
+
+    messages = [{"role": "user", "content": content}]
+
+    # Qwen3-VL uses return_dict=True, return_tensors="pt" API
+    inputs = _qwen3_processor.apply_chat_template(
+        messages,
+        tokenize=True,
+        add_generation_prompt=True,
+        return_dict=True,
+        return_tensors="pt",
+    ).to(_qwen3_model.device)
+
+    with torch.inference_mode():
+        gen_ids = _qwen3_model.generate(
+            **inputs,
+            max_new_tokens=512,
+            temperature=0.7,
+            top_p=0.8,
+            top_k=20,
+            repetition_penalty=1.0,
+            do_sample=True,
+        )
+
+    trimmed = [out[len(inp):] for inp, out in zip(inputs.input_ids, gen_ids)]
+    response = _qwen3_processor.batch_decode(
+        trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+    )[0]
+
+    return {
+        "response": response,
+        "model": model_id,
+        "frames_used": len(frames_b64),
         "error": None,
     }
 
