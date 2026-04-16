@@ -318,13 +318,16 @@ async def _do_render(job, job_id, prompt, texture_prompt, texture_mode,
 
 async def generate_kimodo_motion(job_id, prompt):
     out_npz = str(RENDER_OUTPUT_DIR / f"{job_id}_motion.npz")
+    env = {**__import__("os").environ, "PYTHONPATH": "/kimodo:" + __import__("os").environ.get("PYTHONPATH", "")}
     proc = await asyncio.create_subprocess_exec(
         "python", "-m", "kimodo.scripts.generate",
-        "--prompt", prompt,
         "--output", out_npz,
-        "--text-encoder-url", "http://localhost:9550/",
+        "--bvh",
+        "--no-postprocess",
+        "--seed", "42",
+        prompt,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        env={**__import__("os").environ, "PYTHONPATH": "/kimodo:" + __import__("os").environ.get("PYTHONPATH", "")}
+        env=env
     )
     stdout, stderr = await proc.communicate()
     if proc.returncode != 0:

@@ -20,6 +20,8 @@ services:
       # VLM backend: vss | qwen | qwen7b | openai | nim
       - VLM_BACKEND=${VLM_BACKEND:-vss}
       - VSS_URL=http://host-gateway:8000
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - NIM_URL=${NIM_URL:-}
       - NIM_MODEL=${NIM_MODEL:-}

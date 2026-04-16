@@ -1,14 +1,9 @@
 [submodule "kimodo"]
-    path = kimodo
-    url = https://github.com/NVlabs/Kimodo.git
-    branch = main
-
+	path = kimodo
+	url = https://github.com/nv-tlabs/kimodo.git
 [submodule "cosmos-transfer2.5"]
-    path = cosmos-transfer2.5
-    url = https://github.com/NVIDIA/Cosmos-Transfer2.git
-    branch = main
-
+	path = cosmos-transfer2.5
+	url = https://github.com/nvidia-cosmos/cosmos-transfer2.5.git
 [submodule "video-search-and-summarization"]
-    path = video-search-and-summarization
-    url = https://github.com/NVIDIA-Metropolis/video-search-and-summarization.git
-    branch = main
+	path = video-search-and-summarization
+	url = https://github.com/NVIDIA-AI-Blueprints/video-search-and-summarization.git
