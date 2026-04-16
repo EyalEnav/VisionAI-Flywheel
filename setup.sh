@@ -66,7 +66,24 @@ else
   git clone https://github.com/EyalEnav/VisionAI-Flywheel.git "$REPO_DIR"
 fi
 cd "$REPO_DIR"
-git submodule update --init --recursive
+# Submodules: clone explicitly (shallow) to handle pre-existing dirs
+clone_submodule() {
+  local name="$1" url="$2" branch="$3" dest="$REPO_DIR/$name"
+  if [ -f "$dest/README.md" ]; then
+    echo "+ $name already present"
+  else
+    [ -d "$dest" ] && find "$dest" -mindepth 1 -delete
+    git clone --depth 1 --branch "$branch" "$url" "$dest"
+    echo "+ $name cloned"
+  fi
+}
+
+clone_submodule "video-search-and-summarization" \
+  "https://github.com/NVIDIA-AI-Blueprints/video-search-and-summarization.git" "3.1.0"
+clone_submodule "kimodo" \
+  "https://github.com/nv-tlabs/kimodo.git" "main"
+clone_submodule "cosmos-transfer2.5" \
+  "https://github.com/nvidia-cosmos/cosmos-transfer2.5.git" "main"
 echo "✓ Repo ready at $REPO_DIR"
 
 # ── 3. Shared directories ────────────────────────────────────────────────────
