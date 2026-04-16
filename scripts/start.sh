@@ -30,6 +30,7 @@ echo "$NGC_CLI_API_KEY" | docker login nvcr.io \
 echo "Starting VSS stack..."
 cd "$REPO_DIR/video-search-and-summarization/deployments"
 set -a; source "$REPO_DIR/deployments/vss/env.rtxpro6000bw"; set +a
+set -a; source "$REPO_DIR/video-search-and-summarization/deployments/developer-workflow/dev-profile-base/generated.env"; set +a
 
 docker compose \
   -f compose.yml \
@@ -38,7 +39,7 @@ docker compose \
   up -d
 echo "✓ VSS stack started"
 
-# ── 2. render-api (GPU0, port 9001) — ghcr.io/eyalenav/render-api:latest ────
+# ── 2. render-api (GPU0, port 9001) ──────────────────────────────────────────
 echo "Starting render-api..."
 cd "$REPO_DIR/services/render-api"
 RENDER_API_PORT=9001 \
@@ -48,7 +49,7 @@ RENDER_OUTPUT_DIR=/home/ubuntu/render_output \
   docker compose up -d
 echo "✓ render-api started on :9001"
 
-# ── 3. kimodo-api (GPU1, port 9551) — ghcr.io/eyalenav/kimodo-api:latest ────
+# ── 3. kimodo-api (GPU1, port 9551) ──────────────────────────────────────────
 echo "Starting kimodo-api..."
 cd "$REPO_DIR/services/kimodo-api"
 HF_CACHE="${HF_CACHE:-/opt/dlami/nvme/hf_cache}" \
