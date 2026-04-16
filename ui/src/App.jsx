@@ -175,7 +175,13 @@ function GenerateTab({ visible }) {
     if (!prompt.trim() || running) return;
     setRunning(true); setJob(null); setJobId(null); setPollErr(0);
     try {
-      const r = await apiFetch("/generate", "POST", { prompt, cosmos_transfer: cosmos, vss_annotate: vssAuto });
+      const fd = new FormData();
+      fd.append("prompt", prompt);
+      fd.append("texture_mode", cosmos ? "cosmos" : "skeleton");
+      fd.append("cosmos_prompt", prompt);
+      const resp = await fetch("/api/generate", { method: "POST", body: fd });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+      const r = await resp.json();
       if (r.error) { show(r.error, "error"); setRunning(false); return; }
       setJobId(r.job_id);
       setJob({ status: "queued", progress: 0, log: [`Job started: ${r.job_id}`] });
