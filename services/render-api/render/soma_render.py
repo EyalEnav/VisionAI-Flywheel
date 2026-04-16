@@ -24,9 +24,46 @@ INSIGHTFACE_MODEL = os.environ.get("INSIGHTFACE_MODEL", "/models/inswapper_128.o
 
 
 def _load_soma(npz_path):
-    import sys; sys.path.insert(0, KIMODO_PATH)
+    import sys, types
+    # kimodo package lives at KIMODO_PATH/kimodo (e.g. /kimodo/kimodo)
+    # so we insert KIMODO_PATH as the parent
+    if KIMODO_PATH not in sys.path:
+        sys.path.insert(0, KIMODO_PATH)
+
+    # Stub ALL heavy deps before any kimodo submodule runs
+    if "kimodo.model.load_model" not in sys.modules:
+        def _stub(name, **attrs):
+            m = types.ModuleType(name)
+            for k, v in attrs.items(): setattr(m, k, v)
+            sys.modules.setdefault(name, m)
+            return m
+        _stub("peft")
+        _stub("viser", transforms=types.ModuleType("viser.transforms"))
+        _stub("viser.transforms")
+        _stub("kimodo.model")
+        _stub("kimodo.model.load_model",
+              AVAILABLE_MODELS={}, DEFAULT_MODEL="stub",
+              load_model=lambda *a, **kw: None)
+        _stub("kimodo.model.llm2vec")
+        _stub("kimodo.model.llm2vec.llm2vec")
+        _stub("kimodo.viz.viser_utils")
+        _stub("kimodo.viz.gui")
+        _stub("kimodo.viz.scene")
+        _stub("kimodo.viz.playback")
+        _stub("kimodo.viz.g1_rig")
+        _stub("kimodo.viz.constraint_ui")
+
+    # Import skeleton (safe — no viser deps)
     from kimodo.skeleton import SOMASkeleton77
-    from kimodo.viz.soma_skin import SOMASkin
+
+    # Import SOMASkin directly from file to bypass kimodo.viz.__init__ (which imports viser/Character)
+    import importlib.util as _ilu
+    _skin_path = os.path.join(KIMODO_PATH, "kimodo", "viz", "soma_skin.py")
+    _spec = _ilu.spec_from_file_location("kimodo.viz.soma_skin", _skin_path)
+    _mod = _ilu.module_from_spec(_spec)
+    sys.modules["kimodo.viz.soma_skin"] = _mod
+    _spec.loader.exec_module(_mod)
+    SOMASkin = _mod.SOMASkin
 
     skin_npz  = np.load(f"{SKEL_PATH}/skin_standard.npz", allow_pickle=True)
     skeleton  = SOMASkeleton77(SKEL_PATH)

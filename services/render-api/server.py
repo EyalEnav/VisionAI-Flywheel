@@ -33,6 +33,7 @@ RENDER_OUTPUT_DIR = Path(os.environ.get("RENDER_OUTPUT_DIR", "/tmp/render_output
 RENDER_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 COSMOS_REASON2_URL = os.environ.get("COSMOS_REASON2_URL", "http://localhost:30082")
+KIMODO_API_URL     = os.environ.get("KIMODO_API_URL", "http://kimodo-api:9551")
 INSIGHTFACE_MODEL  = os.environ.get("INSIGHTFACE_MODEL", "/models/inswapper_128.onnx")
 
 # Default VLM backend — override with VLM_BACKEND env var
@@ -302,6 +303,17 @@ async def _do_render(job, job_id, prompt, texture_prompt, texture_mode,
         job["log"].append("Texture colors received")
     elif texture_mode == "skeleton":
         job["log"].append("Skeleton mode — CT2.5 will add texture")
+    elif texture_mode == "surveillance":
+        # Default neutral colors for surveillance rendering
+        colors = {
+            "Hair":   np.array([40,  30,  20,  255], dtype=np.uint8),
+            "Skin":   np.array([210, 180, 140, 255], dtype=np.uint8),
+            "Torso":  np.array([70,  70,  90,  255], dtype=np.uint8),
+            "Legs":   np.array([50,  50,  70,  255], dtype=np.uint8),
+            "Shoes":  np.array([30,  30,  30,  255], dtype=np.uint8),
+            "Socks":  np.array([220, 220, 220, 255], dtype=np.uint8),
+            "Belt":   np.array([60,  40,  20,  255], dtype=np.uint8),
+        }
 
     job["progress"] = 35
 
@@ -317,22 +329,20 @@ async def _do_render(job, job_id, prompt, texture_prompt, texture_mode,
 
 
 async def generate_kimodo_motion(job_id, prompt):
-    out_npz = str(RENDER_OUTPUT_DIR / f"{job_id}_motion.npz")
-    env = {**__import__("os").environ, "PYTHONPATH": "/kimodo:" + __import__("os").environ.get("PYTHONPATH", "")}
-    proc = await asyncio.create_subprocess_exec(
-        "python", "-m", "kimodo.scripts.generate",
-        "--output", out_npz,
-        "--bvh",
-        "--no-postprocess",
-        "--seed", "42",
-        prompt,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        env=env
-    )
-    stdout, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        raise RuntimeError(f"Kimodo failed: {stderr.decode()[-500:]}")
-    return out_npz
+    """Call kimodo-api microservice (sync) — returns NPZ path on shared volume."""
+    import httpx
+    async with httpx.AsyncClient(timeout=300) as client:
+        resp = await client.post(
+            f"{KIMODO_API_URL}/generate",
+            json={"prompt": prompt, "seed": 42, "bvh": True}
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(f"Kimodo API error {resp.status_code}: {resp.text[:300]}")
+        data = resp.json()
+        if not data.get("ok"):
+            raise RuntimeError(f"Kimodo API returned error: {data}")
+        # kimodo-api writes to shared /kimodo_output volume
+        return data["output_path"]
 
 
 async def get_cosmos_texture(prompt):
