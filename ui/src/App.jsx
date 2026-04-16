@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
 const RENDER_API = "/api";
-const VSS_API    = "/vss";
 
 async function apiFetch(path, method = "GET", body = null) {
   const opts = { method, headers: {} };
   if (body) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
   const r = await fetch(RENDER_API + path, opts);
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
   return r.json();
 }
 
@@ -15,7 +15,7 @@ function useToast() {
   const show = useCallback((message, type = "info") => {
     const id = Date.now();
     setToasts(t => [...t, { id, message, type }]);
-    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 4000);
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 5000);
   }, []);
   return { toasts, show };
 }
@@ -52,12 +52,12 @@ function PipelineBar({ job }) {
       <div className="flex justify-between text-xs text-gray-400 font-mono">
         <span>{p}%</span>
         <span className={isDone ? "text-green-400" : isError ? "text-red-400" : "text-yellow-300 animate-pulse"}>
-          {isDone ? "✅ Complete" : isError ? "❌ Error" : "⟳ Running…"}
+          {isDone ? "✅ Complete" : isError ? `❌ ${job.error || "Error"}` : "⟳ Running…"}
         </span>
       </div>
       <div className="w-full bg-gray-800 rounded-full h-3 overflow-hidden">
-        <div className={`h-3 rounded-full transition-all duration-700 ${isError ? "bg-red-500" : isDone ? "bg-green-500" : "bg-blue-500"}`}
-          style={{ width: `${p}%` }} />
+        <div className={`h-3 rounded-full transition-all duration-700 ${isError ? "bg-red-500" : isDone ? "bg-green-500" : "bg-blue-500 animate-pulse"}`}
+          style={{ width: `${Math.max(p, isError ? 100 : 0)}%` }} />
       </div>
       <div className="flex items-center gap-1">
         {STEPS.map((s, i) => {
@@ -81,31 +81,55 @@ function PipelineBar({ job }) {
   );
 }
 
-function LogBox({ lines }) {
+function LogBox({ lines, title = "Logs" }) {
   const ref = useRef();
-  useEffect(() => { if (ref.current) ref.current.scrollTop = ref.current.scrollHeight; }, [lines]);
-  if (!lines?.length) return null;
+  useEffect(() => {
+    if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
+  }, [lines]);
+
   return (
-    <div ref={ref} className="bg-gray-950 border border-gray-700 rounded-lg p-3 h-36 overflow-y-auto font-mono text-xs text-gray-400 space-y-0.5">
-      {lines.map((l, i) => (
-        <div key={i} className={l.includes("Error") || l.includes("error") ? "text-red-400" : l.includes("✅") ? "text-green-400" : ""}>{l}</div>
-      ))}
+    <div className="space-y-1">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{title}</span>
+        <span className="text-xs text-gray-600 font-mono">{lines?.length || 0} lines</span>
+      </div>
+      <div ref={ref}
+        className="bg-gray-950 border border-gray-700 rounded-lg p-3 h-48 overflow-y-auto font-mono text-xs space-y-0.5">
+        {lines?.length ? lines.map((l, i) => (
+          <div key={i} className={
+            l.includes("Error") || l.includes("error") || l.includes("FAILED") ? "text-red-400" :
+            l.includes("✅") || l.includes("done") || l.includes("complete") ? "text-green-400" :
+            l.includes("⟳") || l.includes("Running") || l.includes("Starting") ? "text-yellow-300" :
+            l.includes("🦴") ? "text-orange-400" :
+            l.includes("🎬") ? "text-blue-400" :
+            l.includes("🪐") ? "text-purple-400" :
+            l.includes("🔍") ? "text-cyan-400" :
+            "text-gray-400"
+          }>{l}</div>
+        )) : (
+          <div className="text-gray-700 italic">Waiting for logs…</div>
+        )}
+      </div>
     </div>
   );
 }
 
 function VideoCard({ src, label }) {
+  const [ok, setOk] = useState(false);
   if (!src) return null;
   return (
     <div className="space-y-1">
       <p className="text-xs text-gray-500 font-mono">{label}</p>
       <video controls loop autoPlay muted
         className="w-full rounded-lg border border-gray-700 bg-gray-950 max-h-72"
+        onCanPlay={() => setOk(true)}
         src={src} />
+      {!ok && <p className="text-xs text-gray-600 text-center">Loading video…</p>}
     </div>
   );
 }
 
+// ─── Generate Tab ─────────────────────────────────────────────────────────────
 function GenerateTab({ visible }) {
   const [prompt, setPrompt]   = useState("person pushing through a crowd and falling on a city street");
   const [cosmos, setCosmos]   = useState(true);
@@ -113,51 +137,72 @@ function GenerateTab({ visible }) {
   const [jobId, setJobId]     = useState(null);
   const [job, setJob]         = useState(null);
   const [running, setRunning] = useState(false);
+  const [pollErr, setPollErr] = useState(0);
   const { toasts, show }      = useToast();
   const pollRef               = useRef(null);
 
+  const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+
   const pollJob = useCallback((id) => {
+    stopPoll();
     pollRef.current = setInterval(async () => {
       try {
         const j = await apiFetch(`/jobs/${id}`);
         setJob(j);
+        setPollErr(0);
         if (j.status === "done" || j.status === "error") {
-          clearInterval(pollRef.current);
+          stopPoll();
           setRunning(false);
           show(j.status === "done" ? "Generation complete! 🎉" : `Error: ${j.error || "unknown"}`,
                j.status === "done" ? "success" : "error");
         }
-      } catch(e) {}
-    }, 2000);
+      } catch(e) {
+        setPollErr(n => {
+          const next = n + 1;
+          if (next >= 5) {
+            stopPoll();
+            setRunning(false);
+            setJob(prev => prev ? { ...prev, status: "error", error: "Lost connection to server" } : prev);
+            show("Lost connection to render-api", "error");
+          }
+          return next;
+        });
+      }
+    }, 1500);
   }, [show]);
 
   const generate = async () => {
-    if (!prompt.trim()) return;
-    setRunning(true); setJob(null); setJobId(null);
+    if (!prompt.trim() || running) return;
+    setRunning(true); setJob(null); setJobId(null); setPollErr(0);
     try {
       const r = await apiFetch("/generate", "POST", { prompt, cosmos_transfer: cosmos, vss_annotate: vssAuto });
       if (r.error) { show(r.error, "error"); setRunning(false); return; }
       setJobId(r.job_id);
+      setJob({ status: "queued", progress: 0, log: [`Job started: ${r.job_id}`] });
       pollJob(r.job_id);
-      show("Pipeline started!", "info");
+      show("Pipeline started! 🚀", "info");
     } catch(e) {
       show("Failed to start: " + e.message, "error");
       setRunning(false);
     }
   };
 
-  useEffect(() => () => clearInterval(pollRef.current), []);
+  useEffect(() => () => stopPoll(), []);
 
   if (!visible) return null;
   return (
     <div className="space-y-5 p-5">
       <Toast toasts={toasts} />
+
+      {/* Prompt */}
       <div className="space-y-2">
         <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Scene Prompt</label>
         <textarea value={prompt} onChange={e => setPrompt(e.target.value)} rows={3}
           className="w-full bg-gray-900 border border-gray-700 rounded-lg p-3 text-sm text-white resize-none focus:outline-none focus:border-blue-500"
           placeholder="Describe the motion/scene…" />
       </div>
+
+      {/* Options */}
       <div className="flex gap-6 flex-wrap">
         <label className="flex items-center gap-2 cursor-pointer">
           <input type="checkbox" checked={cosmos} onChange={e => setCosmos(e.target.checked)} className="w-4 h-4 accent-blue-500" />
@@ -168,6 +213,8 @@ function GenerateTab({ visible }) {
           <span className="text-sm text-gray-300">🔍 Auto VSS annotation</span>
         </label>
       </div>
+
+      {/* Pipeline chips */}
       <div className="flex items-center gap-2 flex-wrap">
         <span className="px-2 py-1 rounded text-xs border bg-orange-900/40 border-orange-700 text-orange-300 font-mono">🦴 Kimodo</span>
         <span className="text-gray-600">→</span>
@@ -177,24 +224,41 @@ function GenerateTab({ visible }) {
         {vssAuto && <><span className="text-gray-600">→</span>
           <span className="px-2 py-1 rounded text-xs border bg-green-900/40 border-green-700 text-green-300 font-mono">🔍 VSS</span></>}
       </div>
+
+      {/* Generate button */}
       <button onClick={generate} disabled={running}
         className="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-base transition-all">
-        {running ? "⟳ Generating…" : "🚀 Generate"}
+        {running ? `⟳ Running… (${job?.progress || 0}%)` : "🚀 Generate"}
       </button>
+
+      {/* Job ID display */}
+      {jobId && (
+        <div className="flex items-center gap-2 text-xs font-mono text-gray-500">
+          <span>Job:</span>
+          <span className="text-blue-400 select-all">{jobId}</span>
+          {pollErr > 0 && <span className="text-yellow-400">⚠ poll errors: {pollErr}</span>}
+        </div>
+      )}
+
+      {/* Progress + Logs */}
       {job && (
         <div className="bg-gray-900 border border-gray-700 rounded-xl p-4 space-y-4">
           <PipelineBar job={job} />
-          <LogBox lines={job.log} />
+          <LogBox lines={job.log} title="Pipeline Logs" />
         </div>
       )}
+
+      {/* Videos */}
       {job?.status === "done" && jobId && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
           <VideoCard src={`${RENDER_API}/render/video/${jobId}`} label="🎬 SOMA Render" />
           <VideoCard src={`${RENDER_API}/render/video/${jobId}_cosmos`} label="🪐 Cosmos Transfer" />
         </div>
       )}
+
+      {/* VSS result */}
       {job?.status === "done" && job?.vss_description && (
-        <div className="bg-gray-900 border border-green-800 rounded-xl p-4 mt-2">
+        <div className="bg-gray-900 border border-green-800 rounded-xl p-4">
           <p className="text-xs text-green-400 font-semibold mb-1">🔍 VSS Description</p>
           <p className="text-sm text-gray-200">{job.vss_description}</p>
         </div>
@@ -203,6 +267,7 @@ function GenerateTab({ visible }) {
   );
 }
 
+// ─── Preview Tab ─────────────────────────────────────────────────────────────
 function PreviewTab({ visible }) {
   const [jobs, setJobs]    = useState([]);
   const [loading, setLoad] = useState(false);
@@ -247,11 +312,11 @@ function PreviewTab({ visible }) {
         {jobs.map(j => (
           <div key={j.job_id} onClick={() => setSel(j)}
             className="bg-gray-900 border border-gray-700 hover:border-blue-600 rounded-xl p-3 cursor-pointer transition-all group">
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-xs font-mono text-gray-400 truncate">{j.job_id}</span>
+            <div className="flex justify-between items-center mb-1">
+              <span className="text-xs font-mono text-gray-400 truncate">{j.job_id?.slice(0,16)}…</span>
               <span className={`text-xs px-2 py-0.5 rounded-full font-mono
                 ${j.status === "done" ? "bg-green-900 text-green-300" :
-                  j.status === "error" ? "bg-red-900 text-red-300" : "bg-yellow-900 text-yellow-300"}`}>{j.status}</span>
+                  j.status === "error" ? "bg-red-900 text-red-300" : "bg-yellow-900 text-yellow-300 animate-pulse"}`}>{j.status}</span>
             </div>
             {j.prompt && <p className="text-xs text-gray-500 truncate italic mb-2">"{j.prompt}"</p>}
             <video muted loop className="w-full rounded-lg max-h-36 bg-gray-950 border border-gray-800 group-hover:border-blue-700 transition"
@@ -268,12 +333,16 @@ function PreviewTab({ visible }) {
   );
 }
 
+// ─── Monitor Tab ─────────────────────────────────────────────────────────────
 function MonitorTab({ visible }) {
   const [status, setStatus] = useState(null);
+  const [dockerLines, setDockerLines] = useState([]);
 
   useEffect(() => {
     if (!visible) return;
-    const load = async () => { try { setStatus(await apiFetch("/status")); } catch(e) {} };
+    const load = async () => {
+      try { setStatus(await apiFetch("/status")); } catch(e) {}
+    };
     load();
     const t = setInterval(load, 5000);
     return () => clearInterval(t);
@@ -286,6 +355,7 @@ function MonitorTab({ visible }) {
   return (
     <div className="p-5 space-y-5">
       <h2 className="text-lg font-bold text-white">System Monitor</h2>
+
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         {Object.entries(services).map(([name, info]) => (
           <div key={name} className={`rounded-xl border p-3 space-y-1
@@ -300,29 +370,37 @@ function MonitorTab({ visible }) {
           </div>
         ))}
       </div>
+
       {gpus.length > 0 && (
         <div className="space-y-3">
           <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">GPU Usage</h3>
-          {gpus.map((g, i) => (
-            <div key={i} className="bg-gray-900 border border-gray-700 rounded-xl p-3 space-y-2">
-              <div className="flex justify-between text-xs text-gray-300">
-                <span>GPU {i}: {g.name}</span>
-                <span className="font-mono">{g.memory_used}MB / {g.memory_total}MB</span>
+          {gpus.map((g, i) => {
+            const used  = parseInt(g.mem_used)  || 0;
+            const total = parseInt(g.mem_total) || 1;
+            const pct   = Math.round((used / total) * 100);
+            return (
+              <div key={i} className="bg-gray-900 border border-gray-700 rounded-xl p-3 space-y-2">
+                <div className="flex justify-between text-xs text-gray-300">
+                  <span>GPU {i}: {g.name}</span>
+                  <span className="font-mono">{g.mem_used} / {g.mem_total}</span>
+                </div>
+                <div className="w-full bg-gray-800 rounded-full h-2">
+                  <div className={`h-2 rounded-full transition-all ${pct > 85 ? "bg-red-500" : pct > 60 ? "bg-yellow-500" : "bg-purple-500"}`}
+                    style={{ width: `${pct}%` }} />
+                </div>
+                <div className="text-xs text-gray-500 font-mono">Util: {g.util} | {pct}% VRAM</div>
               </div>
-              <div className="w-full bg-gray-800 rounded-full h-2">
-                <div className="h-2 rounded-full bg-purple-500 transition-all"
-                  style={{ width: `${(g.memory_used / g.memory_total) * 100}%` }} />
-              </div>
-              <div className="text-xs text-gray-500 font-mono">Util: {g.gpu_util}% | Temp: {g.temperature}°C</div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
+
       {!status && <p className="text-gray-600 text-sm">Connecting to render-api…</p>}
     </div>
   );
 }
 
+// ─── Dataset Tab ─────────────────────────────────────────────────────────────
 function DatasetTab({ visible }) {
   const [rows, setRows]    = useState([]);
   const [loading, setLoad] = useState(false);
@@ -378,6 +456,7 @@ function DatasetTab({ visible }) {
   );
 }
 
+// ─── App Shell ────────────────────────────────────────────────────────────────
 const TABS = [
   { id: "generate", label: "🚀 Generate" },
   { id: "preview",  label: "🎬 Preview"  },

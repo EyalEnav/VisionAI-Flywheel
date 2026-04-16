@@ -381,6 +381,11 @@ def render_soma_video(npz_path, out_video, texture_mode, colors, face_path, fps,
 
 
 # ─── Job polling & video serving ─────────────────────────────────────────────
+
+@app.get("/jobs")
+def list_jobs():
+    return {"jobs": [{"job_id": jid, **{k: v for k, v in j.items() if k != "log"}} for jid, j in JOBS.items()]}
+
 @app.get("/jobs/{job_id}")
 def get_job(job_id: str):
     if job_id not in JOBS:
