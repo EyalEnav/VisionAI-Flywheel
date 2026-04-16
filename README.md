@@ -116,6 +116,21 @@ Best config (confirmed): `edge=0.85 + vis=0.45`
 
 ---
 
+
+---
+
+## 🐳 Docker Images (GHCR)
+
+Pre-built images are available on GitHub Container Registry:
+
+| Image | Pull Command |
+|---|---|
+| `render-api` | `docker pull ghcr.io/eyalenav/render-api:latest` |
+| `kimodo-api` | `docker pull ghcr.io/eyalenav/kimodo-api:latest` |
+| `kimodo` | `docker pull ghcr.io/eyalenav/kimodo:1.0` |
+
+> **Note:** Images require NVIDIA GPU with CUDA 12.8+. Pull from a machine with sufficient disk space (each image is ~35–40 GB).
+
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE)
