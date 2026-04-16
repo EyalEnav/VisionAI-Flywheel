@@ -94,27 +94,25 @@ sudo -E docker compose \
   pull 2>&1 | tee /home/ubuntu/vss_pull.log &
 VSS_PULL_PID=$!
 
-# ── 7. Build render-api ───────────────────────────────────────────────────────
-echo "Building render-api..."
-cd "$REPO_DIR/services/render-api"
-sudo docker build -t render-api:local . 2>&1 | tee /home/ubuntu/render_build.log
-echo "✓ render-api built"
+# ── 7. Pull pre-built images from GHCR ───────────────────────────────────────
+echo "Pulling pre-built images from GHCR..."
 
-# ── 8. Build kimodo-api (context = kimodo submodule) ─────────────────────────
-echo "Building kimodo-api (this may take 5-10 min)..."
-cd "$REPO_DIR"
-sudo DOCKER_BUILDKIT=1 docker build \
-  --build-arg HUGGINGFACE_TOKEN="$HUGGINGFACE_TOKEN" \
-  -f services/kimodo-api/Dockerfile \
-  -t kimodo-api:local \
-  kimodo/ 2>&1 | tee /home/ubuntu/kimodo_build.log
-echo "✓ kimodo-api built"
+sudo docker pull ghcr.io/eyalenav/render-api:latest
+sudo docker tag  ghcr.io/eyalenav/render-api:latest  render-api:local
+echo "✓ render-api pulled"
 
-# ── 9. Build cosmos-transfer ──────────────────────────────────────────────────
+sudo docker pull ghcr.io/eyalenav/kimodo-api:latest
+sudo docker tag  ghcr.io/eyalenav/kimodo-api:latest  kimodo-api:local
+echo "✓ kimodo-api pulled"
+
+# cosmos-transfer is built locally (no pre-built image — ~7 min)
 echo "Building cosmos-transfer..."
 cd "$REPO_DIR/services/cosmos-transfer"
 bash build.sh 2>&1 | tee /home/ubuntu/cosmos_build.log
 echo "✓ cosmos-transfer built"
+
+# Optional: rebuild any image locally by setting FORCE_BUILD=1
+# FORCE_BUILD=1 bash setup.sh
 
 # ── 10. Wait for VSS pull ─────────────────────────────────────────────────────
 echo "Waiting for VSS image pull to complete..."

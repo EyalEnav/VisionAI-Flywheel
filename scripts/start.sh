@@ -38,7 +38,7 @@ docker compose \
   up -d
 echo "✓ VSS stack started"
 
-# ── 2. render-api (GPU0, port 9001) ──────────────────────────────────────────
+# ── 2. render-api (GPU0, port 9001) — ghcr.io/eyalenav/render-api:latest ────
 echo "Starting render-api..."
 cd "$REPO_DIR/services/render-api"
 RENDER_API_PORT=9001 \
@@ -48,7 +48,7 @@ RENDER_OUTPUT_DIR=/home/ubuntu/render_output \
   docker compose up -d
 echo "✓ render-api started on :9001"
 
-# ── 3. kimodo-api (GPU1, port 9551) ──────────────────────────────────────────
+# ── 3. kimodo-api (GPU1, port 9551) — ghcr.io/eyalenav/kimodo-api:latest ────
 echo "Starting kimodo-api..."
 cd "$REPO_DIR/services/kimodo-api"
 HF_CACHE="${HF_CACHE:-/opt/dlami/nvme/hf_cache}" \
