@@ -323,7 +323,8 @@ async def generate_kimodo_motion(job_id, prompt):
         "--prompt", prompt,
         "--output", out_npz,
         "--text-encoder-url", "http://localhost:9550/",
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        env={**__import__("os").environ, "PYTHONPATH": "/kimodo:" + __import__("os").environ.get("PYTHONPATH", "")}
     )
     stdout, stderr = await proc.communicate()
     if proc.returncode != 0:
