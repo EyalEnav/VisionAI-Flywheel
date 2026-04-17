@@ -169,6 +169,30 @@ sudo systemctl daemon-reload
 sudo systemctl enable vlm-flywheel.service
 echo "✓ systemd service installed and enabled"
 
+# ── 11b. Install watchdog service (keeps containers alive) ──────────────────
+sudo tee /etc/systemd/system/vlm-watchdog.service > /dev/null <<WDEOF
+[Unit]
+Description=VisionAI-Flywheel Container Watchdog
+After=vlm-flywheel.service docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=ubuntu
+EnvironmentFile=/home/ubuntu/.flywheel.env
+ExecStart=/home/ubuntu/VisionAI-Flywheel/scripts/watchdog.sh
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/ubuntu/flywheel_watchdog.log
+StandardError=append:/home/ubuntu/flywheel_watchdog.log
+
+[Install]
+WantedBy=multi-user.target
+WDEOF
+sudo systemctl daemon-reload
+sudo systemctl enable vlm-watchdog.service
+echo "✓ watchdog service installed and enabled"
+
 # ── 12. First start ───────────────────────────────────────────────────────────
 echo "Starting full stack..."
 bash /home/ubuntu/vlm-pipeline/scripts/start.sh
