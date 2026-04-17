@@ -387,12 +387,127 @@ function GenerateTab({ visible }) {
   );
 }
 
+// ─── Cosmos Panel (standalone) ────────────────────────────────────────────────
+function CosmosPanel({ sourceJobId, onDone }) {
+  const [prompt, setPrompt]       = useState("A person in a photorealistic urban street environment. Surveillance camera footage, overcast lighting.");
+  const [edgeW, setEdgeW]         = useState(0.85);
+  const [visW, setVisW]           = useState(0.45);
+  const [running, setRunning]     = useState(false);
+  const [cosmosJobId, setCosmosJobId] = useState(null);
+  const [job, setJob]             = useState(null);
+  const pollRef                   = useRef(null);
+  const { toasts, show }          = useToast();
+
+  const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  useEffect(() => () => stopPoll(), []);
+
+  const startCosmos = async () => {
+    if (running) return;
+    setRunning(true); setJob(null); setCosmosJobId(null);
+    try {
+      const fd = new FormData();
+      fd.append("job_id", sourceJobId);
+      fd.append("prompt", prompt);
+      fd.append("edge_weight", edgeW);
+      fd.append("vis_weight", visW);
+      const r = await fetch("/api/cosmos", { method: "POST", body: fd });
+      const data = await r.json();
+      if (!r.ok || data.error) throw new Error(data.error || `HTTP ${r.status}`);
+      const cid = data.job_id;
+      setCosmosJobId(cid);
+      setJob({ status: "running", progress: 0, log: ["Cosmos Transfer started…"] });
+      show("🪐 Cosmos Transfer started!", "info");
+      stopPoll();
+      pollRef.current = setInterval(async () => {
+        try {
+          const j = await apiFetch(`/jobs/${cid}`);
+          setJob(j);
+          if (j.status === "done") {
+            stopPoll(); setRunning(false);
+            show("✅ Cosmos done!", "success");
+            if (onDone) onDone(cid);
+          } else if (j.status === "error") {
+            stopPoll(); setRunning(false);
+            show(`❌ ${j.error}`, "error");
+          }
+        } catch(e) {}
+      }, 2000);
+    } catch(e) {
+      show("Failed: " + e.message, "error");
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div className="bg-gray-900 border border-purple-800 rounded-xl p-4 space-y-4">
+      <Toast toasts={toasts} />
+      <div className="flex items-center gap-2">
+        <span className="text-purple-400 text-lg">🪐</span>
+        <span className="text-sm font-semibold text-purple-300">Send to Cosmos Transfer</span>
+        <span className="ml-auto text-xs font-mono text-gray-600 truncate">{sourceJobId?.slice(0,12)}…</span>
+      </div>
+
+      {/* Prompt */}
+      <div className="space-y-1">
+        <label className="text-xs text-gray-400">Scene Prompt</label>
+        <textarea value={prompt} onChange={e => setPrompt(e.target.value)} rows={2}
+          className="w-full bg-gray-800 border border-gray-700 rounded-lg p-2.5 text-xs text-white resize-none focus:outline-none focus:border-purple-600" />
+      </div>
+
+      {/* Weights */}
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-1">
+          <div className="flex justify-between text-xs text-gray-400">
+            <span>Edge Weight</span>
+            <span className="text-purple-300 font-mono">{edgeW.toFixed(2)}</span>
+          </div>
+          <input type="range" min="0" max="1" step="0.05" value={edgeW} onChange={e => setEdgeW(parseFloat(e.target.value))} className="w-full accent-purple-500" />
+          <p className="text-xs text-gray-600">Structure (geometry)</p>
+        </div>
+        <div className="space-y-1">
+          <div className="flex justify-between text-xs text-gray-400">
+            <span>Vis Weight</span>
+            <span className="text-purple-300 font-mono">{visW.toFixed(2)}</span>
+          </div>
+          <input type="range" min="0" max="1" step="0.05" value={visW} onChange={e => setVisW(parseFloat(e.target.value))} className="w-full accent-purple-500" />
+          <p className="text-xs text-gray-600">Color guidance</p>
+        </div>
+      </div>
+      <p className="text-xs text-gray-600">Sweet spot: edge=0.85 + vis=0.45</p>
+
+      {/* Run button */}
+      <button onClick={startCosmos} disabled={running}
+        className={`w-full py-2.5 rounded-lg font-semibold text-sm transition-all flex items-center justify-center gap-2
+          ${running ? "bg-purple-900 text-purple-500 cursor-not-allowed" : "bg-purple-700 hover:bg-purple-600 text-white"}`}>
+        {running ? <><span className="animate-spin">⟳</span> Running Cosmos…</> : "🪐 Run Cosmos Transfer"}
+      </button>
+
+      {/* Progress */}
+      {job && (
+        <div className="space-y-2">
+          <div className="w-full bg-gray-800 rounded-full h-2 overflow-hidden">
+            <div className={`h-2 rounded-full transition-all duration-700 ${job.status === "error" ? "bg-red-500" : job.status === "done" ? "bg-green-500" : "bg-purple-500 animate-pulse"}`}
+              style={{ width: `${job.status === "done" ? 100 : job.status === "error" ? 100 : 40}%` }} />
+          </div>
+          <LogBox lines={job.log} title="Cosmos Logs" />
+        </div>
+      )}
+
+      {/* Result */}
+      {job?.status === "done" && cosmosJobId && (
+        <VideoCard src={`${RENDER_API}/render/video/${cosmosJobId}_cosmos`} label="🪐 Cosmos Output" />
+      )}
+    </div>
+  );
+}
+
 // ─── Preview Tab ──────────────────────────────────────────────────────────────
 function PreviewTab({ visible }) {
-  const [jobs, setJobs]       = useState([]);
-  const [loading, setLoad]    = useState(false);
-  const [selected, setSel]    = useState(null);
-  const [showVSS, setShowVSS] = useState(false);
+  const [jobs, setJobs]         = useState([]);
+  const [loading, setLoad]      = useState(false);
+  const [selected, setSel]      = useState(null);
+  const [showVSS, setShowVSS]   = useState(false);
+  const [showCosmos, setShowCosmos] = useState(false);
 
   const load = async () => {
     setLoad(true);
@@ -401,9 +516,7 @@ function PreviewTab({ visible }) {
   };
 
   useEffect(() => { if (visible) load(); }, [visible]);
-
-  // Reset VSS panel when switching clips
-  useEffect(() => { setShowVSS(false); }, [selected]);
+  useEffect(() => { setShowVSS(false); setShowCosmos(false); }, [selected]);
 
   if (!visible) return null;
   return (
@@ -418,45 +531,54 @@ function PreviewTab({ visible }) {
         <div className="bg-gray-900 border border-blue-700 rounded-xl p-4 space-y-4">
           {/* Header */}
           <div className="flex justify-between items-center">
-            <span className="text-sm font-mono text-blue-300">{selected.job_id}</span>
-            <button onClick={() => setSel(null)} className="text-gray-500 hover:text-white text-xs">✕ close</button>
+            <span className="text-sm font-mono text-blue-300 truncate">{selected.job_id}</span>
+            <button onClick={() => setSel(null)} className="text-gray-500 hover:text-white text-xs ml-2 shrink-0">✕</button>
           </div>
 
           {/* Videos */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <VideoCard src={`${RENDER_API}/render/video/${selected.job_id}`} label="🎬 SOMA Render" />
-            <VideoCard src={`${RENDER_API}/render/video/${selected.job_id}_cosmos`} label="🪐 Cosmos" />
+            {selected.cosmos_status === "done" && (
+              <VideoCard src={`${RENDER_API}/render/video/${selected.job_id}_cosmos`} label="🪐 Cosmos Output" />
+            )}
           </div>
 
-          {/* Existing VSS annotation (from auto-run) */}
-          {selected.vss_description && !showVSS && (
+          {/* Existing VSS annotation */}
+          {selected.vss_description && (
             <div className="bg-gray-800 rounded-lg p-3">
               <p className="text-xs text-green-400 mb-1">🔍 VSS (auto)</p>
               <p className="text-sm text-gray-200">{selected.vss_description}</p>
             </div>
           )}
 
-          {/* Action row */}
-          <div className="flex gap-2">
-            <button
-              onClick={() => setShowVSS(v => !v)}
+          {/* Action buttons */}
+          <div className="flex gap-2 flex-wrap">
+            <button onClick={() => { setShowCosmos(v => !v); setShowVSS(false); }}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all
-                ${showVSS
-                  ? "bg-cyan-800 text-cyan-200 border border-cyan-600"
-                  : "bg-cyan-700 hover:bg-cyan-600 text-white"}`}>
-              🔍 {showVSS ? "Hide VSS Panel" : "Send to VSS"}
+                ${showCosmos ? "bg-purple-800 text-purple-200 border border-purple-600" : "bg-purple-700 hover:bg-purple-600 text-white"}`}>
+              🪐 {showCosmos ? "Hide Cosmos" : "Send to Cosmos"}
+            </button>
+            <button onClick={() => { setShowVSS(v => !v); setShowCosmos(false); }}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all
+                ${showVSS ? "bg-cyan-800 text-cyan-200 border border-cyan-600" : "bg-cyan-700 hover:bg-cyan-600 text-white"}`}>
+              🔍 {showVSS ? "Hide VSS" : "Send to VSS"}
             </button>
             {selected.prompt && (
               <span className="text-xs text-gray-500 italic self-center truncate max-w-xs">"{selected.prompt}"</span>
             )}
           </div>
 
-          {/* VSS Panel (collapsible) */}
-          {showVSS && (
-            <VSSPanel
-              jobId={selected.job_id}
-              preferCosmos={selected.cosmos_status === "done"}
+          {/* Cosmos Panel */}
+          {showCosmos && (
+            <CosmosPanel
+              sourceJobId={selected.job_id}
+              onDone={() => { load(); }}
             />
+          )}
+
+          {/* VSS Panel */}
+          {showVSS && (
+            <VSSPanel jobId={selected.job_id} preferCosmos={selected.cosmos_status === "done"} />
           )}
         </div>
       )}
@@ -469,9 +591,12 @@ function PreviewTab({ visible }) {
               ${selected?.job_id === j.job_id ? "border-blue-500" : "border-gray-700 hover:border-blue-600"}`}>
             <div className="flex justify-between items-center mb-1">
               <span className="text-xs font-mono text-gray-400 truncate">{j.job_id?.slice(0,16)}…</span>
-              <span className={`text-xs px-2 py-0.5 rounded-full font-mono
-                ${j.status === "done" ? "bg-green-900 text-green-300" :
-                  j.status === "error" ? "bg-red-900 text-red-300" : "bg-yellow-900 text-yellow-300 animate-pulse"}`}>{j.status}</span>
+              <div className="flex gap-1 shrink-0">
+                {j.cosmos_status === "done" && <span className="text-xs px-1.5 py-0.5 rounded bg-purple-900 text-purple-300">🪐</span>}
+                <span className={`text-xs px-2 py-0.5 rounded-full font-mono
+                  ${j.status === "done" ? "bg-green-900 text-green-300" :
+                    j.status === "error" ? "bg-red-900 text-red-300" : "bg-yellow-900 text-yellow-300 animate-pulse"}`}>{j.status}</span>
+              </div>
             </div>
             {j.prompt && <p className="text-xs text-gray-500 truncate italic mb-2">"{j.prompt}"</p>}
             <video muted loop className="w-full rounded-lg max-h-36 bg-gray-950 border border-gray-800 group-hover:border-blue-700 transition"
@@ -610,12 +735,161 @@ function DatasetTab({ visible }) {
   );
 }
 
+
+// ─── Infra Tab ────────────────────────────────────────────────────────────────
+function InfraTab({ visible }) {
+  const [containers, setContainers] = useState([]);
+  const [gpus, setGpus]             = useState([]);
+  const [loading, setLoading]       = useState(false);
+  const [busy, setBusy]             = useState({});
+  const [log, setLog]               = useState(null);
+
+  const IP = window.location.hostname;
+
+  const QUICK_LINKS = [
+    { label: "VSS UI",        emoji: "🖥",  href: `http://${IP}:3000`,        desc: "Metropolis dashboard" },
+    { label: "VSS Agent API",  emoji: "🔍", href: `http://${IP}:8000/docs`,   desc: "VSS OpenAPI docs"     },
+    { label: "Render API",     emoji: "🎬", href: `http://${IP}:9001/docs`,   desc: "SOMA render endpoints" },
+    { label: "Cosmos API",     emoji: "🪐", href: `http://${IP}:8080/docs`,   desc: "Cosmos-Transfer2.5"  },
+  ];
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const s = await apiFetch("/status");
+      setGpus(s.gpus || []);
+    } catch {}
+    try {
+      const d = await apiFetch("/render/docker-ps");
+      setContainers(d.containers || []);
+    } catch {}
+    setLoading(false);
+  };
+
+  useEffect(() => { if (visible) load(); }, [visible]);
+
+  const serviceAction = async (name, action) => {
+    setBusy(b => ({ ...b, [name]: action }));
+    setLog(null);
+    try {
+      const d = await apiFetch(`/render/service/${name}/${action}`, "POST");
+      setLog({ name, action, ok: d.returncode === 0, msg: d.stdout || d.stderr || "done" });
+      setTimeout(load, 2000);
+    } catch(e) { setLog({ name, action, ok: false, msg: e.message }); }
+    finally { setBusy(b => ({ ...b, [name]: null })); }
+  };
+
+  const startAll = async () => {
+    setBusy(b => ({ ...b, __all__: true }));
+    setLog({ name: "all", action: "start", ok: null, msg: "Running startup…" });
+    try {
+      const d = await apiFetch("/render/startup", "POST");
+      setLog({ name: "all", action: "start", ok: d.returncode === 0, msg: d.stdout || d.stderr || "done" });
+      setTimeout(load, 4000);
+    } catch(e) { setLog({ name: "all", action: "start", ok: false, msg: e.message }); }
+    finally { setBusy(b => ({ ...b, __all__: null })); }
+  };
+
+  if (!visible) return null;
+  return (
+    <div className="p-5 space-y-5">
+      {/* Quick Links */}
+      <div className="bg-gray-900 border border-gray-700 rounded-xl p-4">
+        <h3 className="text-white font-semibold text-sm mb-3">🔗 Quick Links</h3>
+        <div className="grid grid-cols-2 gap-2">
+          {QUICK_LINKS.map(link => (
+            <a key={link.label} href={link.href} target="_blank" rel="noreferrer"
+              className="flex items-center gap-2 p-2.5 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700 hover:border-gray-500 transition-all group">
+              <span className="text-xl">{link.emoji}</span>
+              <div className="min-w-0">
+                <div className="text-white text-sm font-medium group-hover:text-blue-300 transition-colors">{link.label}</div>
+                <div className="text-gray-500 text-xs truncate">{link.desc}</div>
+              </div>
+              <span className="ml-auto text-gray-600 group-hover:text-gray-400 text-xs">↗</span>
+            </a>
+          ))}
+        </div>
+      </div>
+
+      {/* GPU Status */}
+      {gpus.length > 0 && (
+        <div className="bg-gray-900 border border-gray-700 rounded-xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-white font-semibold text-sm">🖥 GPU Status</h3>
+            <button onClick={load} className="text-xs text-gray-400 hover:text-white px-2 py-1 bg-gray-800 rounded">⟳</button>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {gpus.map((g, i) => (
+              <div key={i} className="bg-gray-800 rounded-lg p-2.5">
+                <div className="text-white text-xs mb-1 truncate">{g.name?.replace("NVIDIA RTX PRO ", "RTX PRO ")}</div>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 bg-gray-700 rounded-full h-1.5">
+                    <div className="bg-green-400 h-1.5 rounded-full transition-all"
+                      style={{ width: `${parseInt(g.mem_used||0)/parseInt(g.mem_total||1)*100}%` }} />
+                  </div>
+                  <span className="text-xs text-gray-400">{g.mem_used}/{g.mem_total}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Docker Containers */}
+      <div className="bg-gray-900 border border-gray-700 rounded-xl p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-white font-semibold text-sm">🐳 Docker Services</h3>
+          <div className="flex gap-2">
+            <button onClick={load} className="text-xs text-gray-400 hover:text-white px-2 py-1 bg-gray-800 rounded">⟳ Refresh</button>
+            <button onClick={startAll} disabled={!!busy.__all__}
+              className="text-xs px-3 py-1 bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white rounded font-semibold">
+              {busy.__all__ ? "…" : "▶ Start All"}
+            </button>
+          </div>
+        </div>
+        {loading
+          ? <p className="text-gray-500 text-sm text-center py-4">Loading…</p>
+          : containers.length === 0
+          ? <p className="text-gray-600 text-sm text-center py-4">Cannot reach render-api</p>
+          : <div className="space-y-2">
+              {containers.map(c => {
+                const isRunning = c.state === "running";
+                const b = busy[c.name];
+                return (
+                  <div key={c.name} className={"flex items-center gap-3 p-3 rounded-lg border " + (isRunning ? "bg-gray-800 border-gray-600" : "bg-gray-900 border-gray-700/50 opacity-70")}>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-white text-sm font-medium">{c.name}</div>
+                      <div className="text-xs text-gray-500 truncate">{c.status}</div>
+                    </div>
+                    <span className={"w-2 h-2 rounded-full flex-shrink-0 " + (isRunning ? "bg-green-400 animate-pulse" : "bg-red-500")} />
+                    <button onClick={() => serviceAction(c.name, isRunning ? "stop" : "start")}
+                      disabled={!!b}
+                      className={"text-xs px-2 py-0.5 rounded border font-medium transition-all " + (b ? "opacity-50 cursor-wait" : isRunning ? "border-red-700 text-red-400 hover:bg-red-900/30" : "border-green-700 text-green-400 hover:bg-green-900/30")}>
+                      {b ? "…" : isRunning ? "Stop" : "Start"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+        }
+        {log && (
+          <div className={"mt-3 rounded-lg p-3 text-xs font-mono border " + (log.ok ? "bg-green-900/20 border-green-800 text-green-300" : log.ok === null ? "bg-yellow-900/20 border-yellow-800 text-yellow-300" : "bg-red-900/20 border-red-800 text-red-300")}>
+            <div className="font-semibold mb-1">{log.name} → {log.action}</div>
+            <div className="whitespace-pre-wrap max-h-24 overflow-y-auto">{log.msg}</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── App Shell ────────────────────────────────────────────────────────────────
 const TABS = [
   { id: "generate", label: "🚀 Generate" },
   { id: "preview",  label: "🎬 Preview"  },
   { id: "monitor",  label: "📊 Monitor"  },
   { id: "dataset",  label: "🗂 Dataset"  },
+  { id: "infra",    label: "⚙️ Infra"    },
 ];
 
 export default function App() {
@@ -643,6 +917,7 @@ export default function App() {
         <PreviewTab  visible={tab === "preview"}  />
         <MonitorTab  visible={tab === "monitor"}  />
         <DatasetTab  visible={tab === "dataset"}  />
+        <InfraTab    visible={tab === "infra"}    />
       </div>
     </div>
   );
