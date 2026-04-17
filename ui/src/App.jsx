@@ -151,10 +151,17 @@ function GenerateTab({ visible }) {
         setJob(j);
         setPollErr(0);
         if (j.status === "done" || j.status === "error") {
-          stopPoll();
           setRunning(false);
-          show(j.status === "done" ? "Generation complete! 🎉" : `Error: ${j.error || "unknown"}`,
-               j.status === "done" ? "success" : "error");
+          if (j.status === "error") {
+            stopPoll();
+            show(`Error: ${j.error || "unknown"}`, "error");
+          } else {
+            show("SOMA ready! 🎬 Cosmos Transfer running…", "success");
+            // Keep polling until cosmos is also done
+            if (j.cosmos_status === "done" || j.cosmos_status === "error") {
+              stopPoll();
+            }
+          }
         }
       } catch(e) {
         setPollErr(n => {
@@ -258,7 +265,15 @@ function GenerateTab({ visible }) {
       {job?.status === "done" && jobId && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
           <VideoCard src={`${RENDER_API}/render/video/${jobId}`} label="🎬 SOMA Render" />
-          <VideoCard src={`${RENDER_API}/render/video/${jobId}_cosmos`} label="🪐 Cosmos Transfer" />
+          {job?.cosmos_status === "done"
+            ? <VideoCard src={`${RENDER_API}/render/video/${jobId}_cosmos`} label="🪐 Cosmos Transfer" />
+            : <div className="rounded-xl border border-purple-700 bg-purple-900/20 flex flex-col items-center justify-center gap-2 p-6 min-h-[160px]">
+                <div className="w-8 h-8 border-4 border-purple-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-purple-300 text-sm font-mono">
+                  {job?.cosmos_status === "error" ? "⚠ Cosmos failed" : "🪐 Cosmos Transfer…"}
+                </span>
+              </div>
+          }
         </div>
       )}
 
@@ -326,7 +341,7 @@ function PreviewTab({ visible }) {
             </div>
             {j.prompt && <p className="text-xs text-gray-500 truncate italic mb-2">"{j.prompt}"</p>}
             <video muted loop className="w-full rounded-lg max-h-36 bg-gray-950 border border-gray-800 group-hover:border-blue-700 transition"
-              src={`${RENDER_API}/render/video/${j.job_id}`}
+              src={`${RENDER_API}/render/video/${j.job_id}${j.cosmos_status === "done" ? "_cosmos" : ""}`}
               onMouseEnter={e => e.target.play()}
               onMouseLeave={e => { e.target.pause(); e.target.currentTime = 0; }} />
           </div>

@@ -33,6 +33,7 @@ RENDER_OUTPUT_DIR = Path(os.environ.get("RENDER_OUTPUT_DIR", "/tmp/render_output
 RENDER_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 COSMOS_REASON2_URL = os.environ.get("COSMOS_REASON2_URL", "http://localhost:30082")
+COSMOS_TRANSFER_URL = os.environ.get("COSMOS_TRANSFER_URL", "http://cosmos-transfer:8080")
 KIMODO_API_URL     = os.environ.get("KIMODO_API_URL", "http://kimodo-api:9551")
 INSIGHTFACE_MODEL  = os.environ.get("INSIGHTFACE_MODEL", "/models/inswapper_128.onnx")
 
@@ -116,7 +117,7 @@ async def generate(
 
     JOBS[job_id] = {
         "status": "queued", "progress": 0,
-        "log": [], "cosmos_response": None, "error": None,
+        "log": [], "cosmos_response": None, "cosmos_status": "pending", "error": None,
         "vlm_analysis": None
     }
 
@@ -234,6 +235,43 @@ async def generate_and_analyze(
 
 
 # ─── Background tasks ─────────────────────────────────────────────────────────
+
+async def run_cosmos_transfer(job, job_id, input_video, output_video, prompt):
+    """Call cosmos-transfer container for Sim2Real styling."""
+    import httpx
+    import asyncio as _asyncio
+    job["log"].append("Starting Cosmos Transfer (Sim2Real)...")
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{COSMOS_TRANSFER_URL}/transfer",
+                json={
+                    "input_path": input_video,
+                    "output_path": output_video,
+                    "prompt": prompt,
+                    "control_weight": 0.85
+                }
+            )
+            if resp.status_code != 200:
+                raise RuntimeError(f"Cosmos Transfer API error: {resp.text[:200]}")
+            ct_job_id = resp.json()["job_id"]
+
+        # Poll until done
+        for _ in range(600):  # up to 10 minutes
+            await _asyncio.sleep(3)
+            async with httpx.AsyncClient(timeout=10) as client:
+                status_resp = await client.get(f"{COSMOS_TRANSFER_URL}/jobs/{ct_job_id}")
+                ct_job = status_resp.json()
+            if ct_job["status"] == "done":
+                job["log"].append(f"Cosmos Transfer done → {output_video}")
+                return
+            elif ct_job["status"] == "error":
+                raise RuntimeError(f"Cosmos Transfer failed: {ct_job.get('error','unknown')}")
+        raise RuntimeError("Cosmos Transfer timed out after 10 minutes")
+    except Exception as e:
+        job["log"].append(f"Cosmos Transfer warning: {e} (continuing without Sim2Real)")
+
+
 async def run_render_job(job_id, prompt, texture_prompt, texture_mode,
                           npz_path, face_path, fps, W, H):
     job = JOBS[job_id]
@@ -241,14 +279,28 @@ async def run_render_job(job_id, prompt, texture_prompt, texture_mode,
         job["status"] = "running"
         out_video = await _do_render(job, job_id, prompt, texture_prompt,
                                      texture_mode, npz_path, face_path, fps, W, H)
+        # SOMA done — mark as done immediately so UI can show preview
         job["progress"] = 100
         job["status"]   = "done"
-        job["log"].append(f"Done → {out_video}")
+        job["cosmos_status"] = "running"
+        job["log"].append(f"SOMA done → starting Cosmos Transfer in background")
+        # Fire cosmos transfer as background task (non-blocking)
+        cosmos_out = str(RENDER_OUTPUT_DIR / f"{job_id}_cosmos.mp4")
+        asyncio.create_task(_cosmos_background(job, job_id, out_video, cosmos_out, prompt))
     except Exception as e:
         job["status"] = "error"
         job["error"]  = str(e)
         job["log"].append(f"ERROR: {e}")
         import traceback; traceback.print_exc()
+
+
+async def _cosmos_background(job, job_id, out_video, cosmos_out, prompt):
+    try:
+        await run_cosmos_transfer(job, job_id, out_video, cosmos_out, prompt)
+        job["cosmos_status"] = "done"
+    except Exception as e:
+        job["cosmos_status"] = "error"
+        job["log"].append(f"Cosmos background error: {e}")
 
 
 async def run_render_and_analyze_job(job_id, prompt, texture_prompt, texture_mode,
@@ -261,6 +313,10 @@ async def run_render_and_analyze_job(job_id, prompt, texture_prompt, texture_mod
         out_video = await _do_render(job, job_id, prompt, texture_prompt,
                                      texture_mode, npz_path, face_path, fps, W, H)
         job["progress"] = 90
+        job["cosmos_status"] = "running"
+        # Fire cosmos in background (don't block VLM analysis)
+        cosmos_out = str(RENDER_OUTPUT_DIR / f"{job_id}_cosmos.mp4")
+        asyncio.create_task(_cosmos_background(job, job_id, out_video, cosmos_out, prompt))
         job["log"].append(f"Analyzing with VLM backend: {vlm_backend}...")
 
         vlm_result = await analyze_video(out_video, prompt=vlm_prompt, backend=vlm_backend)
@@ -409,8 +465,17 @@ def get_job(job_id: str):
 
 @app.get("/render/video/{job_id}")
 def get_video(job_id: str):
+    # Support _cosmos suffix
+    if job_id.endswith("_cosmos"):
+        base_id = job_id[:-7]
+        path = RENDER_OUTPUT_DIR / f"{base_id}_cosmos.mp4"
+        if not path.exists():
+            return JSONResponse({"error": "cosmos video not ready"}, status_code=404)
+        return FileResponse(str(path), media_type="video/mp4",
+                            filename=f"cosmos_{base_id[:8]}.mp4")
     path = RENDER_OUTPUT_DIR / f"{job_id}.mp4"
     if not path.exists():
         return JSONResponse({"error": "video not ready"}, status_code=404)
     return FileResponse(str(path), media_type="video/mp4",
                         filename=f"render_{job_id[:8]}.mp4")
+

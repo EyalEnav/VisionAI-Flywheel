@@ -20,7 +20,7 @@ antlr4-python3-runtime==4.9.3
     # via
     #   hydra-core
     #   omegaconf
-anyio==4.12.1
+anyio>=4.8.0
     # via
     #   gradio
     #   httpx
