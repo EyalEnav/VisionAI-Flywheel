@@ -219,8 +219,10 @@ function VSSPanel({ jobId, preferCosmos }) {
 // ─── Generate Tab ─────────────────────────────────────────────────────────────
 function GenerateTab({ visible }) {
   const [prompt, setPrompt]   = useState("person pushing through a crowd and falling on a city street");
-  const [cosmos, setCosmos]   = useState(true);
-  const [vssAuto, setVssAuto] = useState(true);
+  const [cosmos, setCosmos]       = useState(true);
+  const [edgeWeight, setEdgeWeight] = useState(0.85);
+  const [visWeight, setVisWeight]   = useState(0.45);
+  const [vssAuto, setVssAuto]       = useState(true);
   const [jobId, setJobId]     = useState(null);
   const [job, setJob]         = useState(null);
   const [running, setRunning] = useState(false);
@@ -272,6 +274,8 @@ function GenerateTab({ visible }) {
       fd.append("prompt", prompt);
       fd.append("texture_mode", cosmos ? "cosmos" : "skeleton");
       fd.append("cosmos_prompt", prompt);
+      fd.append("cosmos_edge_weight", edgeWeight);
+      fd.append("cosmos_vis_weight", visWeight);
       const resp = await fetch("/api/generate", { method: "POST", body: fd });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
       const r = await resp.json();
@@ -312,6 +316,36 @@ function GenerateTab({ visible }) {
           <span className="text-sm text-gray-300">🔍 Auto VSS annotation</span>
         </label>
       </div>
+
+      {/* Cosmos Transfer params */}
+      {cosmos && (
+        <div className="bg-gray-900 border border-gray-700 rounded-xl p-4 space-y-3">
+          <p className="text-xs font-semibold text-purple-400 uppercase tracking-wider">🪐 Cosmos Transfer Params</p>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <div className="flex justify-between text-xs text-gray-400">
+                <span>Edge Weight</span>
+                <span className="text-purple-300 font-mono">{edgeWeight.toFixed(2)}</span>
+              </div>
+              <input type="range" min="0" max="1" step="0.05"
+                value={edgeWeight} onChange={e => setEdgeWeight(parseFloat(e.target.value))}
+                className="w-full accent-purple-500" />
+              <p className="text-xs text-gray-600">Structure preservation (geometry)</p>
+            </div>
+            <div className="space-y-1">
+              <div className="flex justify-between text-xs text-gray-400">
+                <span>Vis Weight</span>
+                <span className="text-purple-300 font-mono">{visWeight.toFixed(2)}</span>
+              </div>
+              <input type="range" min="0" max="1" step="0.05"
+                value={visWeight} onChange={e => setVisWeight(parseFloat(e.target.value))}
+                className="w-full accent-purple-500" />
+              <p className="text-xs text-gray-600">Visual/color guidance (0 = edge only)</p>
+            </div>
+          </div>
+          <p className="text-xs text-gray-600">Sweet spot: edge=0.85 + vis=0.45 ✦ Edge only: vis=0</p>
+        </div>
+      )}
 
       {/* Pipeline chips */}
       <div className="flex items-center gap-2 flex-wrap">
