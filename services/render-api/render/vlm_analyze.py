@@ -25,6 +25,8 @@ from pathlib import Path
 # ── Configuration ─────────────────────────────────────────────────────────────
 VLM_BACKEND      = os.environ.get("VLM_BACKEND", "vss")
 VSS_URL          = os.environ.get("VSS_URL", "http://localhost:8000")
+COSMOS_REASON_URL = os.environ.get("COSMOS_REASON_URL", "http://172.18.0.1:30082")
+COSMOS_REASON_MODEL = "nvidia/cosmos-reason2-8b"
 VLLM_URL         = os.environ.get("VLLM_URL", "http://localhost:8090")
 VLLM_MODEL       = os.environ.get("VLLM_MODEL", "vllm-local")   # served-model-name in vLLM
 OPENAI_API_KEY   = os.environ.get("OPENAI_API_KEY", "")
@@ -191,25 +193,29 @@ async def _analyze_vllm(video_path: str, prompt: str, max_frames: int) -> dict:
 # Backend: NVIDIA VSS Agent
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def _analyze_vss(video_path: str, prompt: str) -> dict:
-    import shutil
+async def _analyze_vss(video_path: str, prompt: str, max_frames: int = 8) -> dict:
+    """
+    Analyze video using nvidia/cosmos-reason2-8b VLM directly (vision model).
+    Sends extracted frames as image_url content — no VST/MCP dependency.
+    """
+    frames_b64 = _extract_frames_b64(video_path, max_frames)
 
-    vss_storage = Path(
-        "/home/ubuntu/video-search-and-summarization/deployments"
-        "/data-dir/data_log/vst/clip_storage"
-    )
-    vss_storage.mkdir(parents=True, exist_ok=True)
+    msg_content = []
+    for f_b64 in frames_b64:
+        msg_content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{f_b64}"}
+        })
+    msg_content.append({"type": "text", "text": prompt})
 
-    fname = Path(video_path).name
-    shutil.copy2(video_path, vss_storage / fname)
-    await asyncio.sleep(2)
-
-    async with httpx.AsyncClient(timeout=120) as client:
+    async with httpx.AsyncClient(timeout=180) as client:
         resp = await client.post(
-            f"{VSS_URL}/api/chat/completions",
+            f"{COSMOS_REASON_URL}/v1/chat/completions",
             json={
-                "messages": [{"role": "user", "content": prompt}],
-                "use_knowledge_base": False,
+                "model": COSMOS_REASON_MODEL,
+                "messages": [{"role": "user", "content": msg_content}],
+                "max_tokens": 512,
+                "temperature": 0.3,
             }
         )
         data = resp.json()
@@ -217,8 +223,8 @@ async def _analyze_vss(video_path: str, prompt: str) -> dict:
     answer = data.get("choices", [{}])[0].get("message", {}).get("content", str(data))
     return {
         "response": answer,
-        "model": "nvidia/vss-agent",
-        "frames_used": -1,
+        "model": COSMOS_REASON_MODEL,
+        "frames_used": len(frames_b64),
         "error": None,
     }
 

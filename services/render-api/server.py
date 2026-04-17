@@ -154,12 +154,15 @@ async def analyze(
     # Resolve video path
     resolved_path = None
 
-    if job_id and job_id in JOBS:
+    if job_id:
         p = RENDER_OUTPUT_DIR / f"{job_id}.mp4"
         if p.exists():
             resolved_path = str(p)
+        elif (RENDER_OUTPUT_DIR / f"{job_id}").exists():
+            # job_id already has extension or is a full filename
+            resolved_path = str(RENDER_OUTPUT_DIR / f"{job_id}")
         else:
-            return JSONResponse({"error": f"Job {job_id} video not ready"}, status_code=400)
+            return JSONResponse({"error": f"Video file not found for job_id: {job_id}"}, status_code=404)
 
     elif video_path:
         p = Path(video_path)
