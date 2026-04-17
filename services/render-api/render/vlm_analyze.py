@@ -453,32 +453,29 @@ async def _analyze_nim(video_path: str, prompt: str, max_frames: int) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _extract_frames_b64(video_path: str, max_frames: int = 16) -> list[str]:
-    """Extract up to max_frames evenly spaced frames → list of base64 JPEG strings."""
-    import cv2
+    """Extract up to max_frames evenly spaced frames using ffmpeg → list of base64 JPEG strings."""
+    import subprocess, tempfile, glob, os
 
-    cap = cv2.VideoCapture(video_path)
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    if total <= 0:
-        cap.release()
-        raise ValueError(f"Could not read video: {video_path}")
-
-    indices = _even_indices(total, max_frames)
-    frames_b64 = []
-
-    for idx in indices:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ret, frame = cap.read()
-        if not ret:
-            continue
-        h, w = frame.shape[:2]
-        if w > 640:
-            scale = 640 / w
-            frame = cv2.resize(frame, (640, int(h * scale)))
-        _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        frames_b64.append(base64.b64encode(buf.tobytes()).decode())
-
-    cap.release()
-    return frames_b64
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out = os.path.join(tmpdir, "frame_%04d.jpg")
+        r = subprocess.run(
+            ["ffmpeg", "-i", video_path, "-vf", "fps=2,scale=640:-1",
+             "-vframes", str(max_frames * 4), "-q:v", "3", out, "-y", "-loglevel", "error"],
+            capture_output=True, timeout=30
+        )
+        if r.returncode != 0:
+            raise ValueError(f"Could not read video: {video_path}")
+        frames = sorted(glob.glob(os.path.join(tmpdir, "*.jpg")))
+        if not frames:
+            raise ValueError(f"Could not read video: {video_path}")
+        if len(frames) > max_frames:
+            step = len(frames) / max_frames
+            frames = [frames[int(i * step)] for i in range(max_frames)]
+        out_b64 = []
+        for f in frames:
+            with open(f, "rb") as fp:
+                out_b64.append(base64.b64encode(fp.read()).decode())
+        return out_b64
 
 
 def _even_indices(total: int, n: int) -> list[int]:

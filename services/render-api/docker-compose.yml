@@ -29,7 +29,7 @@ services:
       - VLLM_MODEL=${VLLM_MODEL:-vllm-local}
     volumes:
       # Kimodo submodule (editable install happens in entrypoint)
-      - ../../kimodo:/kimodo:ro
+      - /home/ubuntu/kimodo:/kimodo:ro
       # Shared caches
       - ${HF_CACHE:-/opt/dlami/nvme/hf_cache}:/hf_cache
       # InsightFace models
@@ -40,6 +40,10 @@ services:
       - ${RENDER_OUTPUT_DIR:-/home/ubuntu/render_output}:/render_output
       # VSS clip storage (for VSS backend)
       - /home/ubuntu/video-search-and-summarization/deployments/data-dir:/vss_data
+      # Docker socket (for docker-ps endpoint)
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker:ro
+      - /usr/lib/x86_64-linux-gnu/libseccomp.so.2:/usr/lib/x86_64-linux-gnu/libseccomp.so.2:ro
     extra_hosts:
       - "host-gateway:host-gateway"
     networks:
