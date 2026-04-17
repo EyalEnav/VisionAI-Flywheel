@@ -86,7 +86,6 @@ function LogBox({ lines, title = "Logs" }) {
   useEffect(() => {
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
   }, [lines]);
-
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between">
@@ -129,6 +128,94 @@ function VideoCard({ src, label }) {
   );
 }
 
+// ─── VSS Panel ────────────────────────────────────────────────────────────────
+function VSSPanel({ jobId, preferCosmos }) {
+  const [query, setQuery]       = useState("Describe this surveillance footage in detail. Identify any suspicious activity, people, vehicles, or events.");
+  const [loading, setLoading]   = useState(false);
+  const [result, setResult]     = useState(null);
+  const [error, setError]       = useState(null);
+  const [useCosmosVid, setUseCosmos] = useState(preferCosmos);
+
+  const sendToVSS = async () => {
+    if (!jobId || loading) return;
+    setLoading(true);
+    setResult(null);
+    setError(null);
+    try {
+      const fd = new FormData();
+      // job_id suffix: "" = SOMA render, "_cosmos" = Cosmos output
+      fd.append("job_id", useCosmosVid ? jobId + "_cosmos" : jobId);
+      fd.append("prompt", query);
+      fd.append("backend", "vss");
+      const r = await fetch(RENDER_API + "/analyze", { method: "POST", body: fd });
+      const data = await r.json();
+      if (!r.ok || data.error) throw new Error(data.error || `HTTP ${r.status}`);
+      setResult(data.description || data.result || JSON.stringify(data));
+    } catch (e) {
+      setError(e.message);
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div className="bg-gray-900 border border-cyan-800 rounded-xl p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <span className="text-cyan-400 text-lg">🔍</span>
+        <span className="text-sm font-semibold text-cyan-300">Send to VSS</span>
+      </div>
+
+      {/* Video source selector */}
+      <div className="flex gap-3 text-xs">
+        <label className="flex items-center gap-1.5 cursor-pointer">
+          <input type="radio" name={`vsrc_${jobId}`} checked={!useCosmosVid} onChange={() => setUseCosmos(false)} className="accent-cyan-500" />
+          <span className="text-gray-300">🎬 SOMA Render</span>
+        </label>
+        <label className="flex items-center gap-1.5 cursor-pointer">
+          <input type="radio" name={`vsrc_${jobId}`} checked={useCosmosVid} onChange={() => setUseCosmos(true)} className="accent-cyan-500" />
+          <span className="text-gray-300">🪐 Cosmos Output</span>
+        </label>
+      </div>
+
+      {/* Query textarea */}
+      <textarea
+        value={query}
+        onChange={e => setQuery(e.target.value)}
+        rows={2}
+        className="w-full bg-gray-800 border border-gray-700 rounded-lg p-2.5 text-xs text-white resize-none focus:outline-none focus:border-cyan-600"
+        placeholder="Ask VSS anything about this video…"
+      />
+
+      {/* Send button */}
+      <button
+        onClick={sendToVSS}
+        disabled={loading}
+        className={`w-full py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2
+          ${loading
+            ? "bg-cyan-900 text-cyan-600 cursor-not-allowed"
+            : "bg-cyan-700 hover:bg-cyan-600 text-white"}`}>
+        {loading
+          ? <><span className="animate-spin">⟳</span> Analyzing…</>
+          : "🔍 Analyze with VSS"}
+      </button>
+
+      {/* Result */}
+      {result && (
+        <div className="bg-gray-800 border border-green-700 rounded-lg p-3 space-y-1">
+          <p className="text-xs text-green-400 font-semibold">✅ VSS Response</p>
+          <p className="text-sm text-gray-200 leading-relaxed">{result}</p>
+        </div>
+      )}
+
+      {/* Error */}
+      {error && (
+        <div className="bg-red-950 border border-red-700 rounded-lg p-3">
+          <p className="text-xs text-red-400">❌ {error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Generate Tab ─────────────────────────────────────────────────────────────
 function GenerateTab({ visible }) {
   const [prompt, setPrompt]   = useState("person pushing through a crowd and falling on a city street");
@@ -157,7 +244,6 @@ function GenerateTab({ visible }) {
             show(`Error: ${j.error || "unknown"}`, "error");
           } else {
             show("SOMA ready! 🎬 Cosmos Transfer running…", "success");
-            // Keep polling until cosmos is also done
             if (j.cosmos_status === "done" || j.cosmos_status === "error") {
               stopPoll();
             }
@@ -235,64 +321,44 @@ function GenerateTab({ visible }) {
         {cosmos && <><span className="text-gray-600">→</span>
           <span className="px-2 py-1 rounded text-xs border bg-purple-900/40 border-purple-700 text-purple-300 font-mono">🪐 Cosmos</span></>}
         {vssAuto && <><span className="text-gray-600">→</span>
-          <span className="px-2 py-1 rounded text-xs border bg-green-900/40 border-green-700 text-green-300 font-mono">🔍 VSS</span></>}
+          <span className="px-2 py-1 rounded text-xs border bg-cyan-900/40 border-cyan-700 text-cyan-300 font-mono">🔍 VSS</span></>}
       </div>
 
       {/* Generate button */}
       <button onClick={generate} disabled={running}
-        className="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-base transition-all">
-        {running ? `⟳ Running… (${job?.progress || 0}%)` : "🚀 Generate"}
+        className={`w-full py-3 rounded-xl font-bold text-base transition-all flex items-center justify-center gap-2
+          ${running ? "bg-gray-700 text-gray-500 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/40"}`}>
+        {running ? <><span className="animate-spin">⟳</span> Generating…</> : "🚀 Generate Scene"}
       </button>
 
-      {/* Job ID display */}
-      {jobId && (
-        <div className="flex items-center gap-2 text-xs font-mono text-gray-500">
-          <span>Job:</span>
-          <span className="text-blue-400 select-all">{jobId}</span>
-          {pollErr > 0 && <span className="text-yellow-400">⚠ poll errors: {pollErr}</span>}
-        </div>
-      )}
-
-      {/* Progress + Logs */}
+      {/* Progress */}
       {job && (
         <div className="bg-gray-900 border border-gray-700 rounded-xl p-4 space-y-4">
           <PipelineBar job={job} />
-          <LogBox lines={job.log} title="Pipeline Logs" />
+          <LogBox lines={job.log} />
         </div>
       )}
 
-      {/* Videos */}
+      {/* Result videos */}
       {job?.status === "done" && jobId && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
-          <VideoCard src={`${RENDER_API}/render/video/${jobId}`} label="🎬 SOMA Render" />
-          {job?.cosmos_status === "done"
-            ? <VideoCard src={`${RENDER_API}/render/video/${jobId}_cosmos`} label="🪐 Cosmos Transfer" />
-            : <div className="rounded-xl border border-purple-700 bg-purple-900/20 flex flex-col items-center justify-center gap-2 p-6 min-h-[160px]">
-                <div className="w-8 h-8 border-4 border-purple-500 border-t-transparent rounded-full animate-spin" />
-                <span className="text-purple-300 text-sm font-mono">
-                  {job?.cosmos_status === "error" ? "⚠ Cosmos failed" : "🪐 Cosmos Transfer…"}
-                </span>
-              </div>
-          }
-        </div>
-      )}
-
-      {/* VSS result */}
-      {job?.status === "done" && job?.vss_description && (
-        <div className="bg-gray-900 border border-green-800 rounded-xl p-4">
-          <p className="text-xs text-green-400 font-semibold mb-1">🔍 VSS Description</p>
-          <p className="text-sm text-gray-200">{job.vss_description}</p>
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <VideoCard src={`${RENDER_API}/render/video/${jobId}`} label="🎬 SOMA Render" />
+            <VideoCard src={`${RENDER_API}/render/video/${jobId}_cosmos`} label="🪐 Cosmos Output" />
+          </div>
+          <VSSPanel jobId={jobId} preferCosmos={cosmos} />
         </div>
       )}
     </div>
   );
 }
 
-// ─── Preview Tab ─────────────────────────────────────────────────────────────
+// ─── Preview Tab ──────────────────────────────────────────────────────────────
 function PreviewTab({ visible }) {
-  const [jobs, setJobs]    = useState([]);
-  const [loading, setLoad] = useState(false);
-  const [selected, setSel] = useState(null);
+  const [jobs, setJobs]       = useState([]);
+  const [loading, setLoad]    = useState(false);
+  const [selected, setSel]    = useState(null);
+  const [showVSS, setShowVSS] = useState(false);
 
   const load = async () => {
     setLoad(true);
@@ -302,6 +368,9 @@ function PreviewTab({ visible }) {
 
   useEffect(() => { if (visible) load(); }, [visible]);
 
+  // Reset VSS panel when switching clips
+  useEffect(() => { setShowVSS(false); }, [selected]);
+
   if (!visible) return null;
   return (
     <div className="p-5 space-y-4">
@@ -310,29 +379,60 @@ function PreviewTab({ visible }) {
         <button onClick={load} className="px-3 py-1 rounded bg-gray-700 hover:bg-gray-600 text-sm text-gray-300 transition">🔄 Refresh</button>
       </div>
       {loading && <p className="text-gray-500 text-sm">Loading…</p>}
+
       {selected && (
-        <div className="bg-gray-900 border border-blue-700 rounded-xl p-4 space-y-3">
+        <div className="bg-gray-900 border border-blue-700 rounded-xl p-4 space-y-4">
+          {/* Header */}
           <div className="flex justify-between items-center">
             <span className="text-sm font-mono text-blue-300">{selected.job_id}</span>
             <button onClick={() => setSel(null)} className="text-gray-500 hover:text-white text-xs">✕ close</button>
           </div>
+
+          {/* Videos */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <VideoCard src={`${RENDER_API}/render/video/${selected.job_id}`} label="🎬 SOMA Render" />
             <VideoCard src={`${RENDER_API}/render/video/${selected.job_id}_cosmos`} label="🪐 Cosmos" />
           </div>
-          {selected.vss_description && (
+
+          {/* Existing VSS annotation (from auto-run) */}
+          {selected.vss_description && !showVSS && (
             <div className="bg-gray-800 rounded-lg p-3">
-              <p className="text-xs text-green-400 mb-1">🔍 VSS</p>
+              <p className="text-xs text-green-400 mb-1">🔍 VSS (auto)</p>
               <p className="text-sm text-gray-200">{selected.vss_description}</p>
             </div>
           )}
-          {selected.prompt && <p className="text-xs text-gray-500 italic">"{selected.prompt}"</p>}
+
+          {/* Action row */}
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowVSS(v => !v)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all
+                ${showVSS
+                  ? "bg-cyan-800 text-cyan-200 border border-cyan-600"
+                  : "bg-cyan-700 hover:bg-cyan-600 text-white"}`}>
+              🔍 {showVSS ? "Hide VSS Panel" : "Send to VSS"}
+            </button>
+            {selected.prompt && (
+              <span className="text-xs text-gray-500 italic self-center truncate max-w-xs">"{selected.prompt}"</span>
+            )}
+          </div>
+
+          {/* VSS Panel (collapsible) */}
+          {showVSS && (
+            <VSSPanel
+              jobId={selected.job_id}
+              preferCosmos={selected.cosmos_status === "done"}
+            />
+          )}
         </div>
       )}
+
+      {/* Clip grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {jobs.map(j => (
           <div key={j.job_id} onClick={() => setSel(j)}
-            className="bg-gray-900 border border-gray-700 hover:border-blue-600 rounded-xl p-3 cursor-pointer transition-all group">
+            className={`bg-gray-900 border rounded-xl p-3 cursor-pointer transition-all group
+              ${selected?.job_id === j.job_id ? "border-blue-500" : "border-gray-700 hover:border-blue-600"}`}>
             <div className="flex justify-between items-center mb-1">
               <span className="text-xs font-mono text-gray-400 truncate">{j.job_id?.slice(0,16)}…</span>
               <span className={`text-xs px-2 py-0.5 rounded-full font-mono
@@ -357,7 +457,6 @@ function PreviewTab({ visible }) {
 // ─── Monitor Tab ─────────────────────────────────────────────────────────────
 function MonitorTab({ visible }) {
   const [status, setStatus] = useState(null);
-  const [dockerLines, setDockerLines] = useState([]);
 
   useEffect(() => {
     if (!visible) return;
