@@ -2,22 +2,18 @@
 """
 VisionAI-Flywheel - VLM Dataset PDF Report Generator
 
-Generates a per-clip PDF report with video frame thumbnails and VSS accuracy scores.
+Generates a per-clip PDF report with 3 video frame thumbnails (start/mid/end)
+and VSS accuracy scores.
 
 Usage:
-    python3 scripts/generate_dataset_report.py \\
-        --records data/annotations.json \\
-        --output  vlm_dataset_report.pdf \\
+    python3 scripts/generate_dataset_report.py \
+        --records data/annotations.json \
+        --output  vlm_dataset_report.pdf \
         --clip-dir /path/to/vst/clip_storage
 
 Requirements:
     pip install fpdf2 pillow
     sudo apt install ffmpeg
-
-Record JSON schema:
-    [{"idx": 1, "name": "batch_01_falling", "tag": "falling",
-      "annotation": "ground truth description...",
-      "vss": "vss model response..."}]
 """
 
 import argparse
@@ -35,15 +31,11 @@ except ImportError:
     print("ERROR: fpdf2 not installed. Run: pip install fpdf2", file=sys.stderr)
     sys.exit(1)
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
 DEFAULT_CLIP_DIR = (
     "/home/ubuntu/video-search-and-summarization/"
     "deployments/data-dir/data_log/vst/clip_storage"
 )
-FRAMES_DIR = "/tmp/pdf_frames"
+FRAMES_DIR = "/tmp/pdf_frames3"
 
 TAG_COLORS = {
     "falling":    (220, 90,  60),
@@ -67,12 +59,8 @@ BAD_PHRASES = [
     "no movement", "stationary", "no incidents",
 ]
 
-# ---------------------------------------------------------------------------
-# Scoring
-# ---------------------------------------------------------------------------
 
 def score_vss(vss: str, annotation: str, tag: str) -> int:
-    """Heuristic VSS accuracy score 1-5 vs ground-truth annotation."""
     vss_l = vss.lower()
     ann_l = annotation.lower()
     bads = sum(1 for p in BAD_PHRASES if p in vss_l)
@@ -91,25 +79,47 @@ def safe(t: str) -> str:
     return t.encode("latin-1", errors="replace").decode("latin-1")
 
 
-# ---------------------------------------------------------------------------
-# Frame extraction
-# ---------------------------------------------------------------------------
+def get_video_duration(vid_path: str) -> float:
+    """Return video duration in seconds using ffprobe."""
+    r = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", vid_path],
+        capture_output=True, text=True
+    )
+    try:
+        return float(r.stdout.strip())
+    except Exception:
+        return 4.0  # fallback
 
-def extract_frame(name: str, out_path: str, clip_dir: str) -> bool:
+
+def extract_frames(name: str, clip_dir: str) -> list:
+    """
+    Extract 3 frames: start (10%), mid (50%), end (90%) of video duration.
+    Returns list of existing file paths (may be shorter if extraction fails).
+    """
     vid = os.path.join(clip_dir, f"{name}.mp4")
     if not os.path.exists(vid):
-        return False
-    subprocess.run(
-        ["ffmpeg", "-y", "-ss", "2", "-i", vid,
-         "-frames:v", "1", "-vf", "scale=300:-1", out_path],
-        capture_output=True,
-    )
-    return os.path.exists(out_path) and os.path.getsize(out_path) > 100
+        return []
 
+    duration = get_video_duration(vid)
+    timestamps = {
+        "start": max(0.1, duration * 0.10),
+        "mid":   duration * 0.50,
+        "end":   max(0.1, duration * 0.90),
+    }
 
-# ---------------------------------------------------------------------------
-# PDF
-# ---------------------------------------------------------------------------
+    paths = []
+    for label, t in timestamps.items():
+        out = os.path.join(FRAMES_DIR, f"{name}_{label}.jpg")
+        subprocess.run(
+            ["ffmpeg", "-y", "-ss", str(t), "-i", vid,
+             "-frames:v", "1", "-vf", "scale=240:-1", out],
+            capture_output=True,
+        )
+        if os.path.exists(out) and os.path.getsize(out) > 100:
+            paths.append((label, out))
+    return paths  # list of (label, path)
+
 
 class DatasetPDF(FPDF):
     def header(self):
@@ -158,7 +168,8 @@ def build_pdf(records: list, output: str, clip_dir: str):
         pdf.cell(5, 6, "")
     pdf.ln(10)
     pdf.set_font("Helvetica", "B", 10)
-    pdf.cell(0, 7, f"  Avg VSS Score: {avg_score:.1f}/5.0   |   Total pairs: {len(records)}   |   Status: reviewed",
+    pdf.cell(0, 7,
+             f"  Avg VSS Score: {avg_score:.1f}/5.0   |   Total pairs: {len(records)}   |   Status: reviewed",
              new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.ln(5)
 
@@ -169,6 +180,7 @@ def build_pdf(records: list, output: str, clip_dir: str):
         score = scores[i]
         color = TAG_COLORS.get(tag, (100, 100, 100))
 
+        # Title bar
         pdf.set_fill_color(*color)
         pdf.set_text_color(255, 255, 255)
         pdf.set_font("Helvetica", "B", 11)
@@ -179,42 +191,58 @@ def build_pdf(records: list, output: str, clip_dir: str):
         pdf.set_text_color(0, 0, 0)
         pdf.ln(3)
 
-        frame_path = os.path.join(FRAMES_DIR, f"{rec['name']}.jpg")
-        has_frame = extract_frame(rec["name"], frame_path, clip_dir)
-        IMG_W, IMG_H = 80, 55
-        TEXT_X = 15 + IMG_W + 6
-        TEXT_W = 210 - TEXT_X - 10
-        y_start = pdf.get_y()
+        # Extract 3 frames
+        frames = extract_frames(rec["name"], clip_dir)
 
-        if has_frame:
-            try:
-                pdf.image(frame_path, x=12, y=y_start, w=IMG_W, h=IMG_H)
-            except Exception as e:
-                print(f"  [WARN] {rec['name']}: {e}", file=sys.stderr)
+        # Place frames side by side: start | mid | end
+        IMG_W = 58
+        IMG_H = 40
+        GAP = 4
+        FRAME_AREA_H = IMG_H + 10  # image + label
+        y_frames = pdf.get_y()
 
-        pdf.set_xy(TEXT_X, y_start)
+        if frames:
+            for fi, (label, fpath) in enumerate(frames):
+                x = 12 + fi * (IMG_W + GAP)
+                try:
+                    pdf.image(fpath, x=x, y=y_frames, w=IMG_W, h=IMG_H)
+                except Exception as e:
+                    print(f"  [WARN] {rec['name']} {label}: {e}", file=sys.stderr)
+                # Label below image
+                pdf.set_xy(x, y_frames + IMG_H + 1)
+                pdf.set_font("Helvetica", "B", 7)
+                pdf.set_text_color(80, 80, 80)
+                pdf.cell(IMG_W, 4, label.upper(), align="C")
+
+        pdf.set_y(y_frames + FRAME_AREA_H + 4)
+        pdf.set_text_color(0, 0, 0)
+
+        # Ground truth annotation
+        pdf.set_x(12)
         pdf.set_font("Helvetica", "B", 9)
         pdf.set_text_color(30, 100, 30)
-        pdf.cell(TEXT_W, 5, "Ground Truth Annotation:", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.cell(0, 5, "Ground Truth Annotation:", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_x(12)
         pdf.set_font("Helvetica", "", 9)
         pdf.set_text_color(0, 0, 0)
-        for line in textwrap.wrap(safe(rec["annotation"]), 52):
-            pdf.set_x(TEXT_X)
-            pdf.cell(TEXT_W, 5, line, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        for line in textwrap.wrap(safe(rec["annotation"]), 95):
+            pdf.set_x(12)
+            pdf.cell(0, 5, line, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
         pdf.ln(2)
-        pdf.set_x(TEXT_X)
+        pdf.set_x(12)
         pdf.set_font("Helvetica", "B", 9)
         pdf.set_text_color(150, 60, 20)
-        pdf.cell(TEXT_W, 5, "VSS Response (truncated):", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.cell(0, 5, "VSS Response:", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_font("Helvetica", "I", 8)
         pdf.set_text_color(60, 60, 60)
-        vss_short = safe(rec["vss"][:320] + ("..." if len(rec["vss"]) > 320 else ""))
-        for line in textwrap.wrap(vss_short, 60)[:6]:
-            pdf.set_x(TEXT_X)
-            pdf.cell(TEXT_W, 4.5, line, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        vss_text = safe(rec["vss"])
+        for line in textwrap.wrap(vss_text, 100)[:10]:
+            pdf.set_x(12)
+            pdf.cell(0, 4.5, line, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
-        pdf.set_y(max(pdf.get_y(), y_start + IMG_H) + 5)
+        # Score bar
+        pdf.ln(3)
         pdf.set_x(12)
         sc = SCORE_COLORS.get(score, (100, 100, 100))
         pdf.set_fill_color(*sc)
@@ -225,17 +253,6 @@ def build_pdf(records: list, output: str, clip_dir: str):
         pdf.set_fill_color(220, 220, 220)
         pdf.set_text_color(100, 100, 100)
         pdf.cell(150 - bar_w, 7, "", fill=True)
-        pdf.ln(3)
-
-        pdf.set_x(12)
-        pdf.set_font("Helvetica", "B", 8)
-        pdf.set_text_color(80, 80, 80)
-        pdf.cell(0, 5, "Full VSS Response:", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        pdf.set_font("Helvetica", "", 7.5)
-        pdf.set_text_color(50, 50, 50)
-        for line in textwrap.wrap(safe(rec["vss"]), 100)[:12]:
-            pdf.set_x(12)
-            pdf.cell(0, 4, line, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_text_color(0, 0, 0)
 
     # ---- Summary table ----
@@ -244,7 +261,8 @@ def build_pdf(records: list, output: str, clip_dir: str):
     pdf.set_font("Helvetica", "B", 12)
     pdf.set_fill_color(30, 40, 60)
     pdf.set_text_color(255, 255, 255)
-    pdf.cell(0, 9, "  VSS Score Summary Table", fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(0, 9, "  VSS Score Summary Table", fill=True,
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_text_color(0, 0, 0)
     pdf.ln(3)
 
@@ -261,19 +279,19 @@ def build_pdf(records: list, output: str, clip_dir: str):
         bg = (245, 245, 245) if i % 2 == 0 else (255, 255, 255)
         pdf.set_fill_color(*bg)
         pdf.set_font("Helvetica", "", 7.5)
-        pdf.cell(10,  5.5, str(rec["idx"]),         fill=True, border=1)
-        pdf.cell(55,  5.5, rec["name"][:32],         fill=True, border=1)
+        pdf.cell(10, 5.5, str(rec["idx"]),   fill=True, border=1)
+        pdf.cell(55, 5.5, rec["name"][:32],  fill=True, border=1)
         c = TAG_COLORS.get(rec["tag"], (100, 100, 100))
         pdf.set_fill_color(*c)
         pdf.set_text_color(255, 255, 255)
-        pdf.cell(22,  5.5, rec["tag"],               fill=True, border=1)
+        pdf.cell(22, 5.5, rec["tag"],        fill=True, border=1)
         sc = SCORE_COLORS.get(score, (180, 180, 180))
         pdf.set_fill_color(*sc)
-        pdf.cell(40,  5.5, f"{star(score)} {score}/5", fill=True, border=1)
+        pdf.cell(40, 5.5, f"{star(score)} {score}/5", fill=True, border=1)
         pdf.set_fill_color(*bg)
         pdf.set_text_color(0, 0, 0)
         ann_s = safe(rec["annotation"][:45] + ("..." if len(rec["annotation"]) > 45 else ""))
-        pdf.cell(60,  5.5, ann_s,                    fill=True, border=1)
+        pdf.cell(60, 5.5, ann_s,             fill=True, border=1)
         pdf.ln()
 
     pdf.ln(5)
@@ -290,19 +308,12 @@ def build_pdf(records: list, output: str, clip_dir: str):
     print(f"[OK] PDF saved: {output}  ({size_kb} KB, {len(records)} clips)")
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--output",   default="vlm_dataset_report.pdf",
-                        help="Output PDF path (default: vlm_dataset_report.pdf)")
-    parser.add_argument("--records",  default=None,
-                        help="JSON annotation records file (or pipe via stdin)")
-    parser.add_argument("--clip-dir", default=DEFAULT_CLIP_DIR,
-                        help="Directory containing .mp4 clip files")
+    parser.add_argument("--output",   default="vlm_dataset_report.pdf")
+    parser.add_argument("--records",  default=None)
+    parser.add_argument("--clip-dir", default=DEFAULT_CLIP_DIR)
     args = parser.parse_args()
 
     if args.records:
