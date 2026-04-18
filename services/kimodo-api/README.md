@@ -1,68 +1,64 @@
-# kimodo-api 🕺
+# kimodo-api
 
-> **REST API wrapper for [NVIDIA Kimodo](https://github.com/nv-tlabs/kimodo)** — text-to-motion generation as a microservice.
-
-Kimodo is NVIDIA's kinematic motion diffusion model trained on 700 hours of commercially-licensed mocap data. This image wraps it in a simple FastAPI server so any service can generate 3D human motion from a text prompt over HTTP — no Python environment setup required.
+REST API microservice wrapper around [NVIDIA Kimodo](https://github.com/nv-tlabs/kimodo) — text-to-motion diffusion model generating 77-joint SOMA skeleton motion from natural language prompts.
 
 ---
 
-## ✨ What it does
-
-Send a text prompt → get back a `.npz` motion file (SOMA 77-joint skeleton) ready for rendering or retargeting.
-
-```
-POST /generate
-{ "prompt": "person stumbles and falls after being pushed" }
-
-→ Returns: NPZ binary (SOMA 77-joint, 30fps)
-```
-
----
-
-## 🐳 Quick start
+## Installation
 
 ```bash
-docker run --rm --gpus '"device=0"' \
+docker pull ghcr.io/eyalenav/kimodo-api:latest
+```
+
+### Run
+
+```bash
+docker run --rm \
+  --gpus '"device=0"' \
   -p 9551:9551 \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -e HUGGINGFACE_TOKEN=hf_... \
   ghcr.io/eyalenav/kimodo-api:latest
 ```
 
-**First run** will automatically download the Kimodo-SOMA-RP-v1.1 model weights (~17 GB) from HuggingFace. Subsequent runs use the cached volume.
+> **First run:** downloads Llama-3-8B-Instruct (~16 GB) and Kimodo weights. Subsequent starts are fast (weights cached in `/root/.cache/huggingface`).
 
 ---
 
-## 📋 Requirements
-
-| | Minimum | Recommended |
-|---|---|---|
-| GPU VRAM | 17 GB | 24 GB |
-| Disk (model cache) | 20 GB | 30 GB |
-| CUDA | 12.x | 12.8 |
-| Driver | 535+ | 570+ |
-
-Tested on: RTX 3090, RTX 4090, A100, RTX PRO 6000 Blackwell.
-
----
-
-## 🔌 API Reference
+## API Reference
 
 ### `GET /health`
-Liveness check.
-```json
-{ "status": "ok" }
+
+Check server status.
+
+**Request**
+```
+GET http://localhost:9551/health
 ```
 
-### `POST /generate`
-Generate motion from text prompt.
-
-**Body (JSON):**
+**Response**
 ```json
 {
-  "prompt": "person walking slowly with a limp",
-  "duration": 4.0,
-  "num_samples": 1,
-  "seed": 42,
+  "status": "ok"
+}
+```
+
+---
+
+### `POST /generate`
+
+Generate a motion clip from a text prompt.
+
+**Request**
+```
+POST http://localhost:9551/generate
+Content-Type: application/json
+```
+
+```json
+{
+  "prompt": "person pushing through a crowd aggressively",
+  "num_frames": 120,
   "fps": 30
 }
 ```
@@ -70,82 +66,143 @@ Generate motion from text prompt.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `prompt` | string | required | Natural language motion description |
-| `duration` | float | 4.0 | Motion duration in seconds |
-| `num_samples` | int | 1 | Number of motion variations |
-| `seed` | int | null | Random seed for reproducibility |
-| `fps` | int | 30 | Output frame rate |
+| `num_frames` | int | `120` | Number of frames to generate |
+| `fps` | int | `30` | Frames per second (metadata only) |
 
-**Response:** `application/octet-stream` — NPZ file  
-Filename in `Content-Disposition` header: `motion_<uuid>.npz`
+**Response**
 
-### `GET /status`
-Server info, GPU stats, loaded model name.
+Binary NPZ file (`application/octet-stream`).
+
+The NPZ contains:
+| Key | Shape | Description |
+|---|---|---|
+| `poses` | `(T, 77, 3)` | Joint rotations (axis-angle) per frame |
+| `trans` | `(T, 3)` | Root translation per frame |
+| `betas` | `(16,)` | SMPL body shape parameters |
+
+**Example**
+```bash
+curl -X POST http://localhost:9551/generate \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "person falling to the ground after being pushed"}' \
+  --output output_motion.npz
+```
 
 ---
 
-## 🔗 Use with render-api
+### `POST /generate_bvh`
 
-This container is designed to pair with [`ghcr.io/eyalenav/render-api`](https://ghcr.io/eyalenav/render-api) which consumes the NPZ output and renders a clothed SOMA mesh video.
+Generate motion and return as BVH (Biovision Hierarchy) format.
+
+**Request**
+```
+POST http://localhost:9551/generate_bvh
+Content-Type: application/json
+```
+
+```json
+{
+  "prompt": "two people fighting, punches thrown",
+  "num_frames": 150
+}
+```
+
+**Response**
+
+BVH text file (`text/plain`).
+
+**Example**
+```bash
+curl -X POST http://localhost:9551/generate_bvh \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "drunk person stumbling and falling"}' \
+  --output output_motion.bvh
+```
+
+---
+
+## Hardware Requirements
+
+| Resource | Minimum | Recommended |
+|---|---|---|
+| GPU | RTX 3090 (24 GB VRAM) | RTX 6000 Ada / A100 |
+| VRAM | 24 GB | 48 GB |
+| RAM | 32 GB | 64 GB |
+| Disk | 50 GB | 100 GB |
+| CUDA | 12.1+ | 12.8 |
+
+---
+
+## Environment Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `HUGGINGFACE_TOKEN` | Yes | HF token with access to `meta-llama/Meta-Llama-3-8B-Instruct` |
+| `CUDA_VISIBLE_DEVICES` | No | Limit to specific GPU (e.g. `"0"`) |
+| `PORT` | No | Override default port `9551` |
+
+---
+
+## Integration with VisionAI-Flywheel
+
+`kimodo-api` is designed to run alongside `render-api` and `cosmos-transfer` as part of the full pipeline:
 
 ```yaml
-# docker-compose.yml
+# docker-compose.yml excerpt
 services:
   kimodo-api:
     image: ghcr.io/eyalenav/kimodo-api:latest
-    runtime: nvidia
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=0
     ports:
       - "9551:9551"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu]
     volumes:
       - hf_cache:/root/.cache/huggingface
-
-  render-api:
-    image: ghcr.io/eyalenav/render-api:latest
-    runtime: nvidia
     environment:
-      - NVIDIA_VISIBLE_DEVICES=0
-      - KIMODO_API_URL=http://kimodo-api:9551
-    ports:
-      - "9001:9000"
-    volumes:
-      - hf_cache:/root/.cache/huggingface
+      - HUGGINGFACE_TOKEN=${HUGGINGFACE_TOKEN}
+```
 
-volumes:
-  hf_cache:
+Full `docker-compose.yml`: [github.com/EyalEnav/VisionAI-Flywheel](https://github.com/EyalEnav/VisionAI-Flywheel)
+
+---
+
+## Example: Full Python client
+
+```python
+import requests
+import numpy as np
+import io
+
+def generate_motion(prompt: str, num_frames: int = 120) -> dict:
+    """Generate motion NPZ from text prompt."""
+    response = requests.post(
+        "http://localhost:9551/generate",
+        json={"prompt": prompt, "num_frames": num_frames},
+        timeout=120
+    )
+    response.raise_for_status()
+    
+    npz = np.load(io.BytesIO(response.content))
+    return {
+        "poses": npz["poses"],   # (T, 77, 3)
+        "trans": npz["trans"],   # (T, 3)
+        "betas": npz["betas"],   # (16,)
+    }
+
+# Example usage
+motion = generate_motion("security guard running toward an incident")
+print(f"Generated {motion['poses'].shape[0]} frames")
 ```
 
 ---
 
-## 🏗️ Build from source
+## License
 
-```bash
-git clone --recurse-submodules https://github.com/EyalEnav/VisionAI-Flywheel
-cd VisionAI-Flywheel
-docker build -t kimodo-api:local services/kimodo-api/
-```
+Apache 2.0
 
----
-
-## 📜 License
-
-This Docker image is released under **Apache 2.0** — see [LICENSE](LICENSE).
-
-### Third-party components
-
-| Component | License | Notes |
-|---|---|---|
-| [Kimodo](https://github.com/nv-tlabs/kimodo) | Apache 2.0 | NVIDIA nv-tlabs |
-| [Kimodo model weights](https://huggingface.co/nvidia/Kimodo-SOMA-RP-v1.1) | NVIDIA Open Model License | Commercial use permitted |
-| [SOMA-X body model](https://huggingface.co/nvidia/SOMA-X) | NVIDIA Open Model License | Commercial use permitted |
-| [LLM2Vec](https://github.com/McGill-NLP/llm2vec) | MIT | Text encoder |
-| [FastAPI](https://fastapi.tiangolo.com/) | MIT | — |
-| [PyTorch](https://pytorch.org/) | BSD-3-Clause | — |
-
-> **Note:** Model weights (Kimodo-SOMA-RP-v1.1, SOMA-X) are licensed under the [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/). Commercial use is permitted. The weights are **not baked into this image** — they are downloaded from HuggingFace at runtime.
-
----
-
-## 🙏 Credits
-
-Built on top of NVIDIA's [Kimodo](https://github.com/nv-tlabs/kimodo) by the [VisionAI-Flywheel](https://github.com/EyalEnav/VisionAI-Flywheel) project.
+> Kimodo model weights are released under the [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/). Weights are downloaded at runtime and are not bundled in this image.
