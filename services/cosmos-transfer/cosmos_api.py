@@ -1,18 +1,21 @@
 """
-Cosmos Transfer API v2.1 — multicontrol via JSON spec keys (auto-detected)
+Cosmos Transfer API v3.2 — multicontrol: edge (Canny) + vis (blur) guidance
+No guided mask — clean transfer only.
 """
-import os, uuid, asyncio, json, shutil
+import os, uuid, asyncio, json, shutil, subprocess
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Optional
 
-app = FastAPI(title="Cosmos Transfer API", version="2.1")
+app = FastAPI(title="Cosmos Transfer API", version="3.2")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 JOBS: dict[str, dict] = {}
 JOB_QUEUE = None
+
 
 class TransferRequest(BaseModel):
     input_path: str
@@ -21,6 +24,9 @@ class TransferRequest(BaseModel):
     edge_weight: float = 0.85
     vis_weight: float = 0.45
     multicontrol: bool = True
+    guidance: float = 5.0
+    sigma_max: Optional[str] = "100"
+
 
 @app.on_event("startup")
 async def startup():
@@ -28,9 +34,11 @@ async def startup():
     JOB_QUEUE = asyncio.Queue()
     asyncio.create_task(job_worker())
 
+
 @app.get("/health")
 def health():
     return {"ok": True, "queued": JOB_QUEUE.qsize() if JOB_QUEUE else 0}
+
 
 @app.post("/transfer")
 async def transfer(req: TransferRequest):
@@ -39,15 +47,18 @@ async def transfer(req: TransferRequest):
     await JOB_QUEUE.put((job_id, req))
     return {"job_id": job_id, "queue_position": JOB_QUEUE.qsize()}
 
+
 @app.get("/jobs/{job_id}")
 def get_job(job_id: str):
     if job_id not in JOBS:
         return JSONResponse({"error": "not found"}, status_code=404)
     return JOBS[job_id]
 
+
 @app.get("/jobs")
 def list_jobs():
     return {jid: {"status": j["status"], "output": j.get("output_path", "")} for jid, j in JOBS.items()}
+
 
 async def job_worker():
     while True:
@@ -60,6 +71,7 @@ async def job_worker():
         finally:
             JOB_QUEUE.task_done()
 
+
 async def run_transfer(job_id: str, req: TransferRequest):
     job = JOBS[job_id]
     job["status"] = "running"
@@ -70,32 +82,28 @@ async def run_transfer(job_id: str, req: TransferRequest):
     try:
         input_name = Path(req.input_path).stem
 
-        if req.multicontrol:
-            # Both keys in JSON → Cosmos auto-selects multicontrol model
-            spec = {
-                "name": input_name,
-                "prompt": req.prompt,
-                "video_path": req.input_path,
-                "edge": {"control_weight": req.edge_weight},
-                "vis":  {"control_weight": req.vis_weight},
-            }
-            # No positional arg needed — Cosmos auto-detects from spec keys
-            control_args = []
+        # Build spec — no mask, just edge+vis
+        use_multi = req.multicontrol and req.vis_weight > 0.0
+        spec = {
+            "name": input_name,
+            "prompt": req.prompt,
+            "video_path": req.input_path,
+            "guidance": req.guidance,
+            "edge": {"control_weight": req.edge_weight},
+        }
+        if use_multi:
+            spec["vis"] = {"control_weight": req.vis_weight}
+            job["log"].append(f"[spec] multicontrol edge={req.edge_weight} vis={req.vis_weight}")
         else:
-            spec = {
-                "name": input_name,
-                "prompt": req.prompt,
-                "video_path": req.input_path,
-                "edge": {"control_weight": req.edge_weight},
-            }
-            control_args = ["control:edge"]
+            job["log"].append(f"[spec] edge-only edge={req.edge_weight}")
+
+        job["log"].append(f"[prompt] {req.prompt[:80]}")
+
+        if req.sigma_max is not None:
+            spec["sigma_max"] = req.sigma_max
 
         with open(spec_path, "w") as f:
             json.dump(spec, f)
-
-        mode = "multicontrol(edge+vis)" if req.multicontrol else "edge-only"
-        job["log"].append(f"[{mode}] {req.input_path}")
-        job["log"].append(f"Prompt: {req.prompt[:80]}")
 
         cmd = [
             "python3", "/workspace/examples/inference.py",
@@ -103,7 +111,7 @@ async def run_transfer(job_id: str, req: TransferRequest):
             "-o", work_dir,
             "--disable-guardrails",
             "--offload-guardrail-models",
-        ] + control_args
+        ]
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -138,6 +146,7 @@ async def run_transfer(job_id: str, req: TransferRequest):
         try: os.remove(spec_path)
         except: pass
         shutil.rmtree(work_dir, ignore_errors=True)
+
 
 if __name__ == "__main__":
     import uvicorn
