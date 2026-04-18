@@ -2,6 +2,39 @@
 
 > Synthetic surveillance data pipeline — text prompt → Kimodo motion synthesis → clothed SOMA mesh render → Cosmos-Transfer2.5 Sim2Real → NVIDIA VSS annotation → VLM fine-tuning dataset
 
+[![kimodo-api](https://img.shields.io/badge/ghcr.io-kimodo--api-blue?logo=docker)](https://ghcr.io/eyalenav/kimodo-api)
+[![cosmos-transfer](https://img.shields.io/badge/ghcr.io-cosmos--transfer-blue?logo=docker)](https://ghcr.io/eyalenav/cosmos-transfer)
+[![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
+[![Deploy on Brev](https://brev.nvidia.com/assets/deploy-badge.svg)](https://brev.nvidia.com/launchable/deploy/now?launchableID=env-3AuTjTao5gelkXaCcUkXTRNbdyL)
+
+---
+
+## 🐳 Published Docker Images
+
+Two standalone microservices from this pipeline are publicly available:
+
+### kimodo-api — Text-to-Motion REST API
+```bash
+docker pull ghcr.io/eyalenav/kimodo-api:latest
+docker run --rm --gpus '"device=0"' -p 9551:9551 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  ghcr.io/eyalenav/kimodo-api:latest
+```
+→ `POST http://localhost:9551/generate` with `{"prompt": "person walking fast"}` → NPZ motion file
+
+### cosmos-transfer — Sim2Real Video Diffusion API
+```bash
+docker pull ghcr.io/eyalenav/cosmos-transfer:latest
+docker run --rm --gpus '"device=0"' -p 8080:8080 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  ghcr.io/eyalenav/cosmos-transfer:latest
+```
+→ `POST http://localhost:8080/transfer` with video + prompt → photorealistic MP4
+
+See [`services/kimodo-api/README.md`](services/kimodo-api/README.md) and [`services/cosmos-transfer/README.md`](services/cosmos-transfer/README.md) for full API docs.
+
+---
+
 ## Architecture
 
 ```
@@ -89,19 +122,20 @@ VisionAI-Flywheel/
 │   │   ├── Dockerfile
 │   │   ├── server.py
 │   │   └── render/soma_render.py
-│   ├── kimodo-api/                   # Kimodo FastAPI wrapper
-│   │   ├── Dockerfile
-│   │   ├── kimodo_api_server.py
-│   │   └── docker-compose.yml
-│   └── cosmos-transfer/              # Cosmos-Transfer2.5 API + Docker
-│       ├── cosmos_api.py
+│   ├── kimodo-api/                   # Kimodo FastAPI wrapper 🐳 ghcr.io/eyalenav/kimodo-api
+│   │   ├── README.md
+│   │   ├── LICENSE
+│   │   └── Dockerfile
+│   └── cosmos-transfer/              # Cosmos-Transfer2.5 API 🐳 ghcr.io/eyalenav/cosmos-transfer
+│       ├── README.md
+│       ├── LICENSE
 │       ├── build.sh
-│       └── docker-compose.yml
+│       └── run.sh
 ├── deployments/
 │   └── vss/
-│       ├── docker-compose.override.yml   # VSS overrides for RTX PRO 6000
-│       ├── env.rtxpro6000bw              # GPU/port env profile
-│       └── nginx-extra.conf              # Nginx upstream for render-api
+│       ├── docker-compose.override.yml
+│       ├── env.rtxpro6000bw
+│       └── nginx-extra.conf
 └── helm/
     └── render-api/                   # Kubernetes Helm chart
 ```
@@ -110,12 +144,15 @@ VisionAI-Flywheel/
 
 ## Cosmos Transfer2.5 parameters
 
-Best config (confirmed): `edge=0.85 + vis=0.45`
-- edge control (Canny): preserves geometry and silhouette
-- vis control (blur): preserves scene structure and perspective
+Best config (confirmed across 80+ clips): `edge=0.85 + vis=0.45 + sigma=100`
+- **edge** (Canny): preserves geometry and silhouette
+- **vis** (blur): preserves scene structure and perspective
+- **sigma**: noise level — 100 is the sweet spot for realism vs. fidelity
 
 ---
 
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE)
+
+> NVIDIA Kimodo, SOMA-X, and Cosmos-Transfer2.5 model weights are released under the [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/) (commercial use permitted). Weights are downloaded at runtime and are not included in this repository or Docker images.
