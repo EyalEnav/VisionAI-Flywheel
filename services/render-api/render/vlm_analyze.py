@@ -25,8 +25,6 @@ from pathlib import Path
 # ── Configuration ─────────────────────────────────────────────────────────────
 VLM_BACKEND      = os.environ.get("VLM_BACKEND", "vss")
 VSS_URL          = os.environ.get("VSS_URL", "http://localhost:8000")
-COSMOS_REASON_URL = os.environ.get("COSMOS_REASON_URL", "http://172.18.0.1:30082")
-COSMOS_REASON_MODEL = "nvidia/cosmos-reason2-8b"
 VLLM_URL         = os.environ.get("VLLM_URL", "http://localhost:8090")
 VLLM_MODEL       = os.environ.get("VLLM_MODEL", "vllm-local")   # served-model-name in vLLM
 OPENAI_API_KEY   = os.environ.get("OPENAI_API_KEY", "")
@@ -193,39 +191,54 @@ async def _analyze_vllm(video_path: str, prompt: str, max_frames: int) -> dict:
 # Backend: NVIDIA VSS Agent
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def _analyze_vss(video_path: str, prompt: str, max_frames: int = 8) -> dict:
-    """
-    Analyze video using nvidia/cosmos-reason2-8b VLM directly (vision model).
-    Sends extracted frames as image_url content — no VST/MCP dependency.
-    """
-    frames_b64 = _extract_frames_b64(video_path, max_frames)
+async def _analyze_vss(video_path: str, prompt: str) -> dict:
+    import os
 
-    msg_content = []
-    for f_b64 in frames_b64:
-        msg_content.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{f_b64}"}
-        })
-    msg_content.append({"type": "text", "text": prompt})
+    VST_BASE = os.environ.get("VST_URL", "http://vst:8001")
+    fname = Path(video_path).name
 
     async with httpx.AsyncClient(timeout=180) as client:
-        resp = await client.post(
-            f"{COSMOS_REASON_URL}/v1/chat/completions",
-            json={
-                "model": COSMOS_REASON_MODEL,
-                "messages": [{"role": "user", "content": msg_content}],
-                "max_tokens": 512,
-                "temperature": 0.3,
-            }
+        # Step 1: get upload URL from VST
+        r1 = await client.post(
+            f"{VST_BASE}/api/v1/videos",
+            json={"filename": fname},
         )
-        data = resp.json()
+        r1.raise_for_status()
+        upload_url = r1.json()["url"]
+
+        # Step 2: upload video bytes
+        with open(video_path, "rb") as fh:
+            video_bytes = fh.read()
+        r2 = await client.put(
+            upload_url,
+            content=video_bytes,
+            headers={"Content-Type": "video/mp4"},
+        )
+        r2.raise_for_status()
+        upload_data = r2.json()
+        video_id  = upload_data.get("id", "")
+        sensor_id = upload_data.get("sensorId", "")
+
+        # Step 3: query VSS agent
+        await asyncio.sleep(3)
+        r3 = await client.post(
+            f"{VSS_URL}/api/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": prompt}],
+                "use_knowledge_base": True,
+                "extra_body": {"video_id": video_id} if video_id else {},
+            },
+        )
+        data = r3.json()
 
     answer = data.get("choices", [{}])[0].get("message", {}).get("content", str(data))
     return {
         "response": answer,
-        "model": COSMOS_REASON_MODEL,
-        "frames_used": len(frames_b64),
+        "model": "nvidia/vss-agent",
+        "frames_used": -1,
         "error": None,
+        "video_id": video_id,
+        "sensor_id": sensor_id,
     }
 
 
@@ -453,29 +466,32 @@ async def _analyze_nim(video_path: str, prompt: str, max_frames: int) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _extract_frames_b64(video_path: str, max_frames: int = 16) -> list[str]:
-    """Extract up to max_frames evenly spaced frames using ffmpeg → list of base64 JPEG strings."""
-    import subprocess, tempfile, glob, os
+    """Extract up to max_frames evenly spaced frames → list of base64 JPEG strings."""
+    import cv2
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        out = os.path.join(tmpdir, "frame_%04d.jpg")
-        r = subprocess.run(
-            ["ffmpeg", "-i", video_path, "-vf", "fps=2,scale=640:-1",
-             "-vframes", str(max_frames * 4), "-q:v", "3", out, "-y", "-loglevel", "error"],
-            capture_output=True, timeout=30
-        )
-        if r.returncode != 0:
-            raise ValueError(f"Could not read video: {video_path}")
-        frames = sorted(glob.glob(os.path.join(tmpdir, "*.jpg")))
-        if not frames:
-            raise ValueError(f"Could not read video: {video_path}")
-        if len(frames) > max_frames:
-            step = len(frames) / max_frames
-            frames = [frames[int(i * step)] for i in range(max_frames)]
-        out_b64 = []
-        for f in frames:
-            with open(f, "rb") as fp:
-                out_b64.append(base64.b64encode(fp.read()).decode())
-        return out_b64
+    cap = cv2.VideoCapture(video_path)
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if total <= 0:
+        cap.release()
+        raise ValueError(f"Could not read video: {video_path}")
+
+    indices = _even_indices(total, max_frames)
+    frames_b64 = []
+
+    for idx in indices:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+        ret, frame = cap.read()
+        if not ret:
+            continue
+        h, w = frame.shape[:2]
+        if w > 640:
+            scale = 640 / w
+            frame = cv2.resize(frame, (640, int(h * scale)))
+        _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        frames_b64.append(base64.b64encode(buf.tobytes()).decode())
+
+    cap.release()
+    return frames_b64
 
 
 def _even_indices(total: int, n: int) -> list[int]:

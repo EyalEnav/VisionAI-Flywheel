@@ -24,44 +24,11 @@ INSIGHTFACE_MODEL = os.environ.get("INSIGHTFACE_MODEL", "/models/inswapper_128.o
 
 
 def _load_soma(npz_path):
-    import sys, types
-    # kimodo package lives at KIMODO_PATH/kimodo (e.g. /kimodo/kimodo)
-    # so we insert KIMODO_PATH as the parent
-    if KIMODO_PATH not in sys.path:
-        sys.path.insert(0, KIMODO_PATH)
-
-    # Stub ALL heavy deps before any kimodo submodule runs
-    if "kimodo.model.load_model" not in sys.modules:
-        def _stub(name, **attrs):
-            m = types.ModuleType(name)
-            for k, v in attrs.items(): setattr(m, k, v)
-            sys.modules.setdefault(name, m)
-            return m
-        _stub("peft")
-        _stub("viser", transforms=types.ModuleType("viser.transforms"))
-        _stub("viser.transforms")
-        _stub("kimodo.model")
-        _stub("kimodo.model.load_model",
-              AVAILABLE_MODELS={}, DEFAULT_MODEL="stub",
-              load_model=lambda *a, **kw: None)
-        _stub("kimodo.model.llm2vec")
-        _stub("kimodo.model.llm2vec.llm2vec")
-        _stub("kimodo.viz.viser_utils")
-        _stub("kimodo.viz.gui")
-        _stub("kimodo.viz.scene")
-        _stub("kimodo.viz.playback")
-        _stub("kimodo.viz.g1_rig")
-        _stub("kimodo.viz.constraint_ui")
-
-    # Import skeleton (safe — no viser deps)
+    import sys; sys.path.insert(0, KIMODO_PATH)
     from kimodo.skeleton import SOMASkeleton77
-
-    # Import SOMASkin directly from file to bypass kimodo.viz.__init__ (which imports viser/Character)
-    import importlib.util as _ilu
-    _skin_path = os.path.join(KIMODO_PATH, "kimodo", "viz", "soma_skin.py")
-    _spec = _ilu.spec_from_file_location("kimodo.viz.soma_skin", _skin_path)
-    _mod = _ilu.module_from_spec(_spec)
-    sys.modules["kimodo.viz.soma_skin"] = _mod
+    import importlib.util, sys
+    _spec = importlib.util.spec_from_file_location("soma_skin", "/kimodo/kimodo/viz/soma_skin.py")
+    _mod = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_mod)
     SOMASkin = _mod.SOMASkin
 
@@ -227,6 +194,36 @@ def render(npz_path, out_video, texture_mode="cosmos", colors=None,
     renderer = pyrender.OffscreenRenderer(W, H)
     camera   = pyrender.PerspectiveCamera(yfov=np.pi/3.5, aspectRatio=W/H)
 
+    # ── Compute root trajectory for camera placement ──
+    # Extract XZ path across all frames to decide camera mode
+    root_pos_all = []
+    for _i in range(T):
+        _vt = soma_skin.skin(global_rot_mats[_i:_i+1], posed_joints[_i:_i+1], rot_is_global=True)
+        _vn = _vt[0].detach().numpy()
+        root_pos_all.append([_vn[:,0].mean(), _vn[:,2].mean()])
+    root_pos_all = np.array(root_pos_all)  # (T, 2) — XZ centers per frame
+
+    # Total XZ displacement
+    xz_total = root_pos_all[-1] - root_pos_all[0]
+    xz_dist  = np.linalg.norm(xz_total)
+
+    # Camera mode: if person travels > 1.5m total → tracking side-cam, else fixed overhead
+    TRAVEL_THRESHOLD = 1.5
+    use_travel_cam = xz_dist > TRAVEL_THRESHOLD
+
+    if use_travel_cam:
+        # Side-view camera: positioned perpendicular to travel direction
+        travel_dir = xz_total / (xz_dist + 1e-6)          # normalized direction in XZ
+        perp_dir   = np.array([-travel_dir[1], travel_dir[0]])  # 90° perpendicular in XZ
+
+        # Camera sits to the side, slightly behind midpoint of journey
+        mid_xz = root_pos_all[T//2]
+        cam_side_dist = 5.0   # meters to the side
+        cam_height    = 3.5   # meters up
+        cam_xz = mid_xz + perp_dir * cam_side_dist
+        cam_pos_fixed = np.array([cam_xz[0], cam_height, cam_xz[1]])
+        cam_target_fixed = np.array([mid_xz[0], 1.0, mid_xz[1]])
+
     for i in range(T):
         # ── Protagonist ──
         verts_t  = soma_skin.skin(global_rot_mats[i:i+1], posed_joints[i:i+1], rot_is_global=True)
@@ -236,10 +233,30 @@ def render(npz_path, out_video, texture_mode="cosmos", colors=None,
         mesh_tri = trimesh.Trimesh(vertices=verts_np, faces=soma_skin.faces.detach().numpy(), process=False)
         mesh_tri.visual = trimesh.visual.ColorVisuals(mesh=mesh_tri, vertex_colors=vertex_colors)
 
-        # ── Scene (NO green ground quad — dark concrete floor) ──
+        # ── Scene with ground plane ──
         bg = [18, 18, 18, 255] if texture_mode != "skeleton" else [0, 0, 0, 255]
         scene = pyrender.Scene(ambient_light=[0.3,0.3,0.3], bg_color=bg)
         scene.add(pyrender.Mesh.from_trimesh(mesh_tri, smooth=True))
+
+        # ── Ground plane: 8x8m asphalt slab centered under character ──
+        # Y = foot level (min Y of protagonist verts, slightly below)
+        foot_y = float(verts_np[:, 1].min()) - 0.01
+        gw = 8.0  # width/depth in meters
+        gverts = np.array([
+            [cx - gw, foot_y, cz - gw],
+            [cx + gw, foot_y, cz - gw],
+            [cx + gw, foot_y, cz + gw],
+            [cx - gw, foot_y, cz + gw],
+        ], dtype=np.float32)
+        gfaces = np.array([[0,1,2],[0,2,3]], dtype=np.int32)
+        # Asphalt color: dark grey with slight blue-tone
+        if texture_mode == "skeleton":
+            gc = np.array([[40, 40, 40, 255]]*4, dtype=np.uint8)
+        else:
+            gc = np.array([[55, 55, 60, 255]]*4, dtype=np.uint8)
+        ground_tri = trimesh.Trimesh(vertices=gverts, faces=gfaces, process=False)
+        ground_tri.visual = trimesh.visual.ColorVisuals(mesh=ground_tri, vertex_colors=gc)
+        scene.add(pyrender.Mesh.from_trimesh(ground_tri, smooth=False))
 
         # ── Crowd extras ──
         for ex in extras_data:
@@ -257,9 +274,14 @@ def render(npz_path, out_video, texture_mode="cosmos", colors=None,
         _add_light(scene, [ 1,-1, 1], [0.5,0.6, 0.8], 3.0)
         _add_light(scene, [ 0, 1, 0], [0.8,0.8, 1.0], 2.0)
 
-        # ── Surveillance camera (fixed, high angle) ──
-        cam_pos = np.array([cx+1.8, 4.8, cz+3.8])
-        target  = np.array([cx, 0.9, cz])
+        # ── Camera: side-view for traveling motion, overhead for in-place ──
+        if use_travel_cam:
+            cam_pos = cam_pos_fixed
+            target  = cam_target_fixed
+        else:
+            # Classic surveillance overhead tracking
+            cam_pos = np.array([cx+1.8, 4.8, cz+3.8])
+            target  = np.array([cx, 0.9, cz])
         z_ax = cam_pos-target; z_ax /= np.linalg.norm(z_ax)
         x_ax = np.cross([0,1,0], z_ax); x_ax /= np.linalg.norm(x_ax)
         y_ax = np.cross(z_ax, x_ax)

@@ -1,40 +1,25 @@
+version: "3.8"
 services:
   cosmos-transfer:
-    image: cosmos-transfer:local
+    image: ghcr.io/eyalenav/visionai-flywheel/cosmos-transfer:latest
     container_name: cosmos-transfer
     restart: unless-stopped
     runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=1
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - HF_HOME=/hf_cache
+      - TRANSFORMERS_CACHE=/hf_cache
     ports:
       - "8080:8080"
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=${TRANSFER_GPU_DEVICE:-1}
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      - HF_HOME=/hf_cache
-      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
     volumes:
       - /home/ubuntu/vlm-pipeline/cosmos-transfer2.5:/workspace
       - /home/ubuntu/vlm-pipeline/services/cosmos-transfer/cosmos_api.py:/cosmos_api.py:ro
       - ${HF_CACHE:-/opt/dlami/nvme/hf_cache}:/hf_cache
       - /tmp:/tmp
       - /home/ubuntu/render_output:/render_output
-    networks:
-      - vlm-net
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ['${TRANSFER_GPU_DEVICE:-1}']
-              capabilities: [gpu]
-    command: ["python3", "/cosmos_api.py"]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-networks:
-  vlm-net:
-    name: vlm-net
-    external: true
+      - /home/ubuntu/video-search-and-summarization/deployments/data-dir/data_log/vst/clip_storage:/clip_storage:ro
+      - /opt/dlami/nvme/cosmos_bg:/cosmos_bg
+    shm_size: "8gb"
+    command: >
+      python3 /cosmos_api.py

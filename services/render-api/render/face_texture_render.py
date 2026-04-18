@@ -47,29 +47,25 @@ V = len(bind_verts)
 face_img = cv2.imread(FACE_PATH)
 face_rgb = cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB)
 
-# Use insightface to detect face bounding box (mediapipe replaced)
-try:
-    import insightface
-    from insightface.app import FaceAnalysis
-    fa = FaceAnalysis(allowed_modules=['detection'], providers=['CPUExecutionProvider'])
-    fa.prepare(ctx_id=-1, det_size=(640, 640))
-    faces = fa.get(face_rgb)
-    if faces:
-        bbox = faces[0].bbox.astype(int)
+# Use mediapipe to detect face bounding box
+import mediapipe as mp
+mp_fd = mp.solutions.face_detection
+with mp_fd.FaceDetection(model_selection=1, min_detection_confidence=0.5) as fd:
+    res = fd.process(face_rgb)
+    if res.detections:
+        d = res.detections[0].location_data.relative_bounding_box
         ih, iw = face_rgb.shape[:2]
-        x1 = max(0, bbox[0] - 20)
-        y1 = max(0, bbox[1] - 40)
-        x2 = min(iw, bbox[2] + 20)
-        y2 = min(ih, bbox[3] + 20)
+        x1 = max(0, int(d.xmin * iw) - 20)
+        y1 = max(0, int(d.ymin * ih) - 40)
+        x2 = min(iw, int((d.xmin + d.width)  * iw) + 20)
+        y2 = min(ih, int((d.ymin + d.height) * ih) + 20)
         face_crop = face_rgb[y1:y2, x1:x2]
-        print(f"Face detected (insightface): {x1},{y1} -> {x2},{y2}")
+        print(f"Face detected: {x1},{y1} → {x2},{y2}")
     else:
-        raise ValueError("No face detected")
-except Exception as e:
-    print(f"insightface fallback: {e} — using center crop")
-    ih, iw = face_rgb.shape[:2]
-    face_crop = face_rgb[int(ih*0.05):int(ih*0.65), int(iw*0.1):int(iw*0.9)]
-    print("Using center crop fallback")
+        # fallback: use center crop
+        ih, iw = face_rgb.shape[:2]
+        face_crop = face_rgb[int(ih*0.05):int(ih*0.65), int(iw*0.1):int(iw*0.9)]
+        print("No face detected, using center crop")
 
 face_crop = cv2.resize(face_crop, (256, 256))
 face_pil  = Image.fromarray(face_crop)

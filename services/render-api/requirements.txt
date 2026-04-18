@@ -1,7 +1,7 @@
 fastapi>=0.110.0
 uvicorn[standard]>=0.29.0
 python-multipart
-numpy
+numpy<2
 torch
 trimesh
 pyrender
