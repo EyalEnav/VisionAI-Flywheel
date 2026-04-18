@@ -20,6 +20,8 @@ services:
       - /home/ubuntu/render_output:/render_output
       - /home/ubuntu/video-search-and-summarization/deployments/data-dir/data_log/vst/clip_storage:/clip_storage:ro
       - /opt/dlami/nvme/cosmos_bg:/cosmos_bg
+      - /opt/dlami/nvme/cosmos_masks:/cosmos_masks
+      - /opt/dlami/nvme/cosmos_bg_v2:/cosmos_bg_v2
     shm_size: "8gb"
     command: >
       python3 /cosmos_api.py
