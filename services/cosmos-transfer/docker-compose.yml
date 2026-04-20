@@ -14,6 +14,7 @@ services:
       - NCCL_IB_DISABLE=1
       - MASTER_ADDR=localhost
       - MASTER_PORT=29500
+      - NPROC_PER_NODE=2
     ports:
       - "8080:8080"
     volumes:
@@ -27,6 +28,5 @@ services:
       - /opt/dlami/nvme/cosmos_masks:/cosmos_masks
       - /opt/dlami/nvme/cosmos_bg_v2:/cosmos_bg_v2
       - /opt/dlami/nvme/cosmos_sigma80:/cosmos_sigma80
-    shm_size: "16gb"
-    command: >
-      python3 /cosmos_api.py
+    shm_size: "32gb"
+    command: python3 /cosmos_api.py
