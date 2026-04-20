@@ -263,7 +263,7 @@ def render(npz_path, out_video, texture_mode="cosmos", colors=None,
         mesh_tri.visual = trimesh.visual.ColorVisuals(mesh=mesh_tri, vertex_colors=vertex_colors)
 
         # ── Scene with ground plane ──
-        bg = [18, 18, 18, 255]
+        bg = [200, 200, 200, 255]
         amb = [1.0, 1.0, 1.0]
         scene = pyrender.Scene(ambient_light=amb, bg_color=bg)
         scene.add(pyrender.Mesh.from_trimesh(mesh_tri, smooth=True))
