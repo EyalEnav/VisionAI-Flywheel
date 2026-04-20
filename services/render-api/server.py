@@ -36,6 +36,25 @@ COSMOS_REASON2_URL = os.environ.get("COSMOS_REASON2_URL", "http://localhost:3008
 COSMOS_TRANSFER_URL = os.environ.get("COSMOS_TRANSFER_URL", "http://172.18.0.1:8080")
 INSIGHTFACE_MODEL  = os.environ.get("INSIGHTFACE_MODEL", "/models/inswapper_128.onnx")
 
+# ─── Multi-GPU Kimodo round-robin ─────────────────────────────────────────────
+import itertools as _itertools
+_KIMODO_GPU0 = os.environ.get("KIMODO_GPU0_URL", "")
+_KIMODO_GPU1 = os.environ.get("KIMODO_GPU1_URL", "")
+_KIMODO_DEFAULT = os.environ.get("KIMODO_API_URL", "http://kimodo-api:9551")
+
+def _build_kimodo_pool():
+    urls = [u for u in [_KIMODO_GPU0, _KIMODO_GPU1] if u]
+    if not urls:
+        urls = [_KIMODO_DEFAULT]
+    return urls
+
+_kimodo_pool = _build_kimodo_pool()
+_kimodo_rr   = _itertools.cycle(_kimodo_pool)
+
+def get_kimodo_url() -> str:
+    """Return next Kimodo backend URL (round-robin across available GPUs)."""
+    return next(_kimodo_rr)
+
 # Default VLM backend — override with VLM_BACKEND env var
 # Options: vss | qwen | qwen7b | openai | nim
 VLM_BACKEND = os.environ.get("VLM_BACKEND", "vss")
@@ -358,7 +377,7 @@ async def _do_render(job, job_id, prompt, texture_prompt, texture_mode,
 async def generate_kimodo_motion(job_id, prompt):
     import httpx, shutil
     out_npz = str(RENDER_OUTPUT_DIR / f"{job_id}_motion.npz")
-    kimodo_url = os.environ.get("KIMODO_API_URL", "http://kimodo-api:9551")
+    kimodo_url = get_kimodo_url()  # round-robin across GPU0/GPU1
     async with httpx.AsyncClient(timeout=300) as client:
         resp = await client.post(
             f"{kimodo_url}/generate",

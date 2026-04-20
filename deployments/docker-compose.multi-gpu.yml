@@ -1,0 +1,107 @@
+# Multi-GPU override for SOMA + Kimodo pipeline
+# Usage: docker compose -f docker-compose.yml -f docker-compose.multi-gpu.yml up -d
+# 
+# Architecture:
+#   kimodo-api-gpu0  → GPU0 port 9550  (motion generation)
+#   kimodo-api-gpu1  → GPU1 port 9551  (motion generation)
+#   render-api       → CPU, 4 workers  (SOMA mesh render, pure CPU/numpy)
+#
+# Load balancer (nginx) on port 9560 distributes kimodo requests across both GPUs.
+
+networks:
+  vlm-net:
+    external: true
+
+services:
+
+  # ── Kimodo GPU-0 ─────────────────────────────────────────────────────────
+  kimodo-gpu0:
+    image: kimodo-api:latest
+    container_name: kimodo-gpu0
+    restart: on-failure
+    runtime: nvidia
+    ipc: host
+    shm_size: 16gb
+    networks: [vlm-net]
+    ports:
+      - "9550:9551"
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0
+      - CUDA_VISIBLE_DEVICES=0
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - HF_HOME=/hf_cache
+      - KIMODO_OUTPUT_DIR=/kimodo_output
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - /home/ubuntu/.cache/huggingface:/hf_cache
+      - ${KIMODO_OUTPUT_DIR:-/home/ubuntu/kimodo_output}:/kimodo_output
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9551/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 120s
+
+  # ── Kimodo GPU-1 ─────────────────────────────────────────────────────────
+  kimodo-gpu1:
+    image: kimodo-api:latest
+    container_name: kimodo-gpu1
+    restart: on-failure
+    runtime: nvidia
+    ipc: host
+    shm_size: 16gb
+    networks: [vlm-net]
+    ports:
+      - "9551:9551"
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=1
+      - CUDA_VISIBLE_DEVICES=0
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - HF_HOME=/hf_cache
+      - KIMODO_OUTPUT_DIR=/kimodo_output
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - /home/ubuntu/.cache/huggingface:/hf_cache
+      - ${KIMODO_OUTPUT_DIR:-/home/ubuntu/kimodo_output}:/kimodo_output
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9551/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 120s
+
+  # ── Render API — 4 CPU workers ────────────────────────────────────────────
+  render-api:
+    environment:
+      - KIMODO_GPU0_URL=http://kimodo-gpu0:9551
+      - KIMODO_GPU1_URL=http://kimodo-gpu1:9551
+    command: >
+      uvicorn server:app --host 0.0.0.0 --port 9000 --workers 4
+
+  # ── Nginx load balancer for Kimodo ───────────────────────────────────────
+  kimodo-lb:
+    image: nginx:alpine
+    container_name: kimodo-lb
+    restart: unless-stopped
+    networks: [vlm-net]
+    ports:
+      - "9560:80"
+    volumes:
+      - ./kimodo-lb.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - kimodo-gpu0
+      - kimodo-gpu1
