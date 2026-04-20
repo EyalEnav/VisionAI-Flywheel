@@ -139,6 +139,43 @@ def _get_crowd_mesh(soma_skin, bind_verts, posed_joints, global_rot_mats,
 
 
 
+
+
+def _build_grid_mesh(gw=8.0, cell_size=1.0, line_frac=0.06):
+    """Build a single flat ground mesh with white grid lines painted as vertex colors.
+    Centered at origin; translate to foot_y + cx/cz at render time."""
+    N = int(2 * gw / cell_size) + 1
+    verts = []; faces = []; colors = []; vi = 0
+
+    def add_quad(v0, v1, v2, v3, col):
+        nonlocal vi
+        verts.extend([v0, v1, v2, v3])
+        faces.append([vi, vi+1, vi+2]); faces.append([vi, vi+2, vi+3])
+        colors.extend([col]*4); vi += 4
+
+    # Base slab (dark grey asphalt)
+    add_quad([-gw,0,-gw],[gw,0,-gw],[gw,0,gw],[-gw,0,gw],[88,87,84,255])
+
+    lh = 0.02
+    lw = gw * line_frac
+    for j in range(N):
+        z = -gw + j * cell_size
+        add_quad([-gw,lh,z-lw],[gw,lh,z-lw],[gw,lh,z+lw],[-gw,lh,z+lw],[255,255,255,255])
+    for i in range(N):
+        x = -gw + i * cell_size
+        add_quad([x-lw,lh,-gw],[x+lw,lh,-gw],[x+lw,lh,gw],[x-lw,lh,gw],[255,255,255,255])
+
+    mesh = trimesh.Trimesh(
+        vertices=np.array(verts, dtype=np.float32),
+        faces=np.array(faces, dtype=np.int32),
+        process=False
+    )
+    mesh.visual = trimesh.visual.ColorVisuals(mesh=mesh,
+        vertex_colors=np.array(colors, dtype=np.uint8))
+    return mesh
+
+_grid_mesh_cache = _build_grid_mesh()
+
 def render(npz_path, out_video, texture_mode="cosmos", colors=None,
            face_path=None, fps=30, W=640, H=480,
            crowd_extras=None):
@@ -255,23 +292,10 @@ def render(npz_path, out_video, texture_mode="cosmos", colors=None,
         scene = pyrender.Scene(ambient_light=amb, bg_color=bg)
         scene.add(pyrender.Mesh.from_trimesh(mesh_tri, smooth=True))
 
-        # ── Ground plane: simple flat quad under character ──
+        # ── Ground plane: dark asphalt slab + white grid lines ──
         foot_y = float(verts_np[:, 1].min()) - 0.01
-        char_height = float(verts_np[:, 1].max()) - float(verts_np[:, 1].min())
-        gw = max(8.0, char_height * 3.0)
-        _floor_verts = np.array([
-            [cx-gw, foot_y, cz-gw],
-            [cx+gw, foot_y, cz-gw],
-            [cx+gw, foot_y, cz+gw],
-            [cx-gw, foot_y, cz+gw],
-        ], dtype=np.float32)
-        _floor_faces = np.array([[0,1,2],[0,2,3]], dtype=np.int32)
-        _floor_mesh = trimesh.Trimesh(vertices=_floor_verts, faces=_floor_faces, process=False)
-        _floor_mesh.visual = trimesh.visual.ColorVisuals(
-            mesh=_floor_mesh,
-            vertex_colors=np.array([[65,65,70,255]]*4, dtype=np.uint8)
-        )
-        scene.add(pyrender.Mesh.from_trimesh(_floor_mesh, smooth=False))
+        scene.add(pyrender.Mesh.from_trimesh(_grid_mesh_cache, smooth=False),
+                  pose=np.array([[1,0,0,cx],[0,1,0,foot_y],[0,0,1,cz],[0,0,0,1]], dtype=np.float32))
 
         # ── Crowd extras ──
         for ex in extras_data:
