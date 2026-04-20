@@ -6,10 +6,14 @@ services:
     restart: unless-stopped
     runtime: nvidia
     environment:
-      - NVIDIA_VISIBLE_DEVICES=1
+      - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
       - HF_HOME=/hf_cache
       - TRANSFORMERS_CACHE=/hf_cache
+      - NCCL_DEBUG=WARN
+      - NCCL_IB_DISABLE=1
+      - MASTER_ADDR=localhost
+      - MASTER_PORT=29500
     ports:
       - "8080:8080"
     volumes:
@@ -23,6 +27,6 @@ services:
       - /opt/dlami/nvme/cosmos_masks:/cosmos_masks
       - /opt/dlami/nvme/cosmos_bg_v2:/cosmos_bg_v2
       - /opt/dlami/nvme/cosmos_sigma80:/cosmos_sigma80
-    shm_size: "8gb"
+    shm_size: "16gb"
     command: >
       python3 /cosmos_api.py

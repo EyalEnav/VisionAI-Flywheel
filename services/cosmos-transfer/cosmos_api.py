@@ -196,7 +196,7 @@ async def run_transfer(job_id: str, req: TransferRequest):
             json.dump(spec, f)
 
         cmd = [
-            "python3", "/workspace/examples/inference.py",
+            "torchrun", "--nproc_per_node=2", "/workspace/examples/inference.py",
             "-i", spec_path,
             "-o", work_dir,
             "--disable-guardrails",
