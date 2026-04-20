@@ -54,33 +54,9 @@ def _load_soma(npz_path):
 
 
 def _vertex_colors_cosmos(bind_verts, colors):
-    V = len(bind_verts)
-    vc = np.zeros((V, 4), dtype=np.uint8)
-    y_min, y_max = bind_verts[:,1].min(), bind_verts[:,1].max()
-    y_norm = (bind_verts[:,1] - y_min) / (y_max - y_min)
-    x_abs  = np.abs(bind_verts[:,0])
-    z_vals = bind_verts[:,2]
-
-    head_mask = y_norm > 0.80
-    z_min = bind_verts[head_mask,2].min() if head_mask.sum() > 0 else 0
-    z_max = bind_verts[head_mask,2].max() if head_mask.sum() > 0 else 1
-
-    for v in range(V):
-        yn, xn, zn = y_norm[v], x_abs[v], z_vals[v]
-        if head_mask[v]:
-            hz = (zn - z_min) / max(z_max - z_min, 1e-6)
-            vc[v] = colors["Skin"] if hz > 0.4 else colors["Hair"]
-        elif (y_norm[v] > 0.74) and not head_mask[v]:
-            vc[v] = colors["Skin"]
-        elif yn < 0.08:   vc[v] = colors["Shoes"]
-        elif yn < 0.14:   vc[v] = colors["Socks"]
-        elif yn < 0.52:   vc[v] = colors["Legs"]
-        elif yn < 0.56:   vc[v] = colors["Belt"]
-        elif yn < 0.80:   vc[v] = colors["Torso"] if xn < 0.18 else colors["Skin"]
-        else:             vc[v] = colors["Skin"]
-
-    vc[(y_norm > 0.20) & (y_norm < 0.60) & (x_abs > 0.22)] = colors["Skin"]
-    return vc
+    """Paint all vertices with Skin color only (no clothing zones)."""
+    skin = np.array(colors["Skin"], dtype=np.uint8)
+    return np.tile(skin, (len(bind_verts), 1)).astype(np.uint8)
 
 
 def _vertex_colors_skeleton(bind_verts):
@@ -336,18 +312,6 @@ def render(npz_path, out_video, texture_mode="cosmos", colors=None,
                 frame_bgr = swapper.get(frame_bgr, dst, src_face, paste_back=True)
 
         # HUD overlay
-        if texture_mode != "skeleton":
-            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            img  = Image.fromarray(frame_rgb)
-            draw = ImageDraw.Draw(img)
-            draw.rectangle([0,0,W,22], fill=(0,0,0,200))
-            draw.text((8,4), f"■ REC  CAM-04  {i/fps:05.2f}s", fill=(255,50,50))
-            draw.text((W-170,4), "AI SURVEILLANCE ACTIVE", fill=(255,180,0))
-            draw.rectangle([0,H-20,W,H], fill=(0,0,0,180))
-            ts = datetime(2026,4,12,19,0,0) + timedelta(seconds=i/fps)
-            draw.text((8,H-16), "CROWD INCIDENT DETECTED", fill=(80,255,100))
-            draw.text((W-165,H-16), ts.strftime("%Y-%m-%d  %H:%M:%S"), fill=(180,180,180))
-            frame_bgr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
 
         cv2.imwrite(f"{out_dir}/frame_{i:04d}.png", frame_bgr)
 
