@@ -25,7 +25,7 @@ class TransferRequest(BaseModel):
     vis_weight: float = 0.45
     multicontrol: bool = True
     guidance: float = 5.0
-    sigma_max: Optional[str] = "100"
+sigma_max: Optional[int] = None  # 0-200, None=default. Lower=more faithful to input
 
 
 @app.on_event("startup")
@@ -96,6 +96,16 @@ async def run_transfer(job_id: str, req: TransferRequest):
             job["log"].append(f"[spec] multicontrol edge={req.edge_weight} vis={req.vis_weight}")
         else:
             job["log"].append(f"[spec] edge-only edge={req.edge_weight}")
+
+if req.sigma_max is not None:
+            spec["sigma_max"] = str(req.sigma_max)
+            job["log"].append(f"[sigma_max] {req.sigma_max}")
+
+        if mask_path and os.path.exists(mask_path):
+            spec["guided_generation_mask"] = mask_path
+            spec["guided_generation_step_threshold"] = req.guided_steps
+            job["log"].append(f"[guided] mask={mask_path}, steps={req.guided_steps}")
+
 
         job["log"].append(f"[prompt] {req.prompt[:80]}")
 

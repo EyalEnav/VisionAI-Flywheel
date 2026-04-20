@@ -1,7 +1,7 @@
 version: "3.8"
 services:
   cosmos-transfer:
-    image: ghcr.io/eyalenav/visionai-flywheel/cosmos-transfer:latest
+    image: cosmos-transfer:local
     container_name: cosmos-transfer
     restart: unless-stopped
     runtime: nvidia
@@ -13,15 +13,16 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - /home/ubuntu/vlm-pipeline/cosmos-transfer2.5:/workspace
-      - /home/ubuntu/vlm-pipeline/services/cosmos-transfer/cosmos_api.py:/cosmos_api.py:ro
-      - ${HF_CACHE:-/opt/dlami/nvme/hf_cache}:/hf_cache
+      - /home/ubuntu/cosmos-transfer2.5:/workspace
+      - /home/ubuntu/VisionAI-Flywheel/services/cosmos-transfer/cosmos_api.py:/cosmos_api.py:ro
+      - ${HF_CACHE:-/home/ubuntu/.cache/huggingface}:/hf_cache
       - /tmp:/tmp
       - /home/ubuntu/render_output:/render_output
       - /home/ubuntu/video-search-and-summarization/deployments/data-dir/data_log/vst/clip_storage:/clip_storage:ro
       - /opt/dlami/nvme/cosmos_bg:/cosmos_bg
       - /opt/dlami/nvme/cosmos_masks:/cosmos_masks
       - /opt/dlami/nvme/cosmos_bg_v2:/cosmos_bg_v2
+      - /opt/dlami/nvme/cosmos_sigma80:/cosmos_sigma80
     shm_size: "8gb"
     command: >
       python3 /cosmos_api.py
