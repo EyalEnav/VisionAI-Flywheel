@@ -154,7 +154,7 @@ def _build_grid_mesh(gw=8.0, cell_size=1.0, line_frac=0.06):
         colors.extend([col]*4); vi += 4
 
     # Base slab (dark grey asphalt)
-    add_quad([-gw,0,-gw],[gw,0,-gw],[gw,0,gw],[-gw,0,gw],[88,87,84,255])
+    add_quad([-gw,0,-gw],[gw,0,-gw],[gw,0,gw],[-gw,0,gw],[220,218,215,255])
 
     lh = 0.02
     lw = gw * line_frac
