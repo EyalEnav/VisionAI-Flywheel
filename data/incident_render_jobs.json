@@ -1,0 +1,210 @@
+{
+  "run_and_fall": {
+    "job_id": "fbcca3db-7749-4fe9-b9a2-2613c756f252",
+    "npz": "6c7d855d-0ff1-4026-8db1-6f40d3feeccc_motion.npz",
+    "category": "fall",
+    "tags": [
+      "run",
+      "fall",
+      "trip",
+      "injury"
+    ],
+    "cosmos_prompts": {
+      "city_street": "Surveillance camera view, person running on a busy city sidewalk, suddenly trips and falls hard onto the pavement, pedestrians around, daytime urban scene, CCTV footage",
+      "night_alley": "Dark nighttime CCTV footage, person running in a city alley, trips and collapses to the ground, low light, security camera perspective",
+      "parking_lot": "Overhead surveillance camera, person running through parking lot, slips and falls violently, concrete ground, security footage"
+    },
+    "kimodo_prompt": "a person running fast and suddenly tripping and falling hard to the ground"
+  },
+  "limp_walk": {
+    "job_id": "7c016ce6-f72a-4b30-b92a-90c8d638ef81",
+    "npz": "06d2e172-37c2-4241-84b2-89c2f59916e0_motion.npz",
+    "category": "injured_walk",
+    "tags": [
+      "limp",
+      "injury",
+      "walk",
+      "pain"
+    ],
+    "cosmos_prompts": {
+      "city_street": "CCTV footage of a person limping painfully along a city sidewalk, dragging injured leg, slow labored movement, urban environment, surveillance camera angle",
+      "hospital_area": "Security camera footage, injured person limping near hospital entrance area, concrete walkway, struggling to move forward",
+      "night_street": "Nighttime surveillance camera, person limping heavily down a dark street, lit by streetlights, security footage perspective"
+    },
+    "kimodo_prompt": "a person limping heavily, dragging one leg, struggling to walk, in pain"
+  },
+  "crawling": {
+    "job_id": "6cbe1089-b955-48b9-9223-ef88c24b045c",
+    "npz": "0fefd87b-8402-4adb-8c8d-331e35c28187_motion.npz",
+    "category": "fall",
+    "tags": [
+      "crawl",
+      "injury",
+      "ground",
+      "distress"
+    ],
+    "cosmos_prompts": {
+      "city_street": "CCTV footage, person collapsed and crawling on hands and knees on urban sidewalk, distressed, unable to stand, pedestrians nearby, overhead surveillance angle",
+      "parking_lot": "Overhead security camera, person crawling across parking lot floor, injured or distressed, concrete ground, security footage",
+      "underpass": "Surveillance footage, person crawling under a city underpass, dim lighting, wet ground, distress situation"
+    },
+    "kimodo_prompt": "a person crawling on the ground on hands and knees, unable to stand, exhausted or injured"
+  },
+  "stumble_drunk": {
+    "job_id": "f14ef7f1-636f-4c0d-8055-e525c87f2144",
+    "npz": "2305096a-de52-4b9f-9023-215877d1a136_motion.npz",
+    "category": "distress",
+    "tags": [
+      "drunk",
+      "stumble",
+      "stagger",
+      "unsteady"
+    ],
+    "cosmos_prompts": {
+      "city_street": "CCTV surveillance footage, intoxicated person stumbling and staggering on a city sidewalk, unsteady balance, almost falling, nighttime urban environment",
+      "bar_area": "Security camera outside a bar or nightclub, person staggering drunk on the street, nighttime, neon lights in background",
+      "metro_station": "Subway station surveillance camera, person stumbling drunkenly on platform, unsteady gait, security footage angle"
+    },
+    "kimodo_prompt": "a person stumbling and staggering like they are drunk or dizzy, unsteady gait, almost falling"
+  },
+  "punch_fight": {
+    "job_id": "b9d2c38b-f076-44a0-a207-a14699aacca6",
+    "npz": "e89ca976-4abf-4b1d-a9b6-84870529de28_motion.npz",
+    "category": "violence",
+    "tags": [
+      "fight",
+      "punch",
+      "assault",
+      "violence"
+    ],
+    "cosmos_prompts": {
+      "city_street": "CCTV footage, two men fighting aggressively on a city sidewalk, throwing punches, bystanders watching, daytime urban environment, security camera angle",
+      "night_alley": "Dark alley surveillance footage, violent fight between two people, punching and struggling, low light security camera",
+      "parking_lot": "Parking lot security camera, two people in a violent physical altercation, punching each other, security footage overhead view"
+    },
+    "kimodo_prompt": "two people fighting, punching each other aggressively, one person throwing punches at the other"
+  },
+  "assault_grab": {
+    "job_id": "f84c70ff-81c7-49ec-93d0-bc83749d7029",
+    "npz": "644376cc-42c2-4425-8553-f38766519ff8_motion.npz",
+    "category": "violence",
+    "tags": [
+      "assault",
+      "grab",
+      "attack",
+      "victim"
+    ],
+    "cosmos_prompts": {
+      "city_street": "CCTV surveillance, attacker grabbing victim from behind on busy city street, aggressive assault, victim struggling to escape, security camera footage",
+      "night_street": "Nighttime security camera footage, person being grabbed and assaulted from behind on a dark street, victim fighting back, low light",
+      "metro_station": "Metro station surveillance camera, assault in progress, aggressor grabbing victim aggressively, bystanders present, security footage"
+    },
+    "kimodo_prompt": "one person grabbing another aggressively from behind, assault, victim trying to escape"
+  },
+  "person_shoved": {
+    "job_id": "57df90e5-e2b5-4872-aaab-fb4f2a17991d",
+    "npz": "cb985961-a768-4cfd-8b9b-cca43e5e6c21_motion.npz",
+    "category": "violence",
+    "tags": [
+      "shove",
+      "push",
+      "violence",
+      "altercation"
+    ],
+    "cosmos_prompts": {
+      "city_street": "CCTV footage, person being violently shoved on sidewalk, losing balance stumbling backward, aggressive altercation, urban daytime, security camera",
+      "shopping_area": "Security camera in shopping district, person shoved aggressively, stumbling into wall, urban area, surveillance footage",
+      "night_street": "Nighttime surveillance camera, violent shove on dark city street, victim stumbles, attacker aggressive, security footage"
+    },
+    "kimodo_prompt": "a person being violently shoved and pushed by another person, losing balance and stumbling back"
+  },
+  "running_escape": {
+    "job_id": "e4ada141-f0f8-46e8-8530-57ed5c6aa66e",
+    "npz": "4fef5058-2f08-45b0-8d6a-f2f386612cfe_motion.npz",
+    "category": "escape",
+    "tags": [
+      "run",
+      "escape",
+      "panic",
+      "sprint",
+      "flee"
+    ],
+    "cosmos_prompts": {
+      "city_street": "CCTV footage of a person sprinting in panic on city sidewalk, running away from something, looking back in fear, urgent desperate movement, security camera",
+      "night_street": "Nighttime security camera, person fleeing at full sprint down dark city street, panic escape, urgent movement, surveillance footage",
+      "parking_lot": "Overhead parking lot security camera, person running frantically across the lot, panic, looking back, escape situation, CCTV"
+    },
+    "kimodo_prompt": "a person running as fast as possible in a panic, sprinting to escape, looking behind them in fear"
+  },
+  "collapse_sudden": {
+    "job_id": "7484ddb6-f45e-4bef-94ec-1924ea291c27",
+    "npz": "4eed9545-e4e7-446f-b69e-2e9e1b6aa103_motion.npz",
+    "category": "medical",
+    "tags": [
+      "collapse",
+      "unconscious",
+      "medical",
+      "emergency"
+    ],
+    "cosmos_prompts": {
+      "city_street": "CCTV surveillance, person suddenly collapsing unconscious on city sidewalk, medical emergency, bystanders gathering, daytime urban, security camera overhead",
+      "metro_station": "Metro station security camera, person collapsing suddenly on platform, medical emergency, crowd reacting, surveillance footage",
+      "shopping_area": "Shopping street security camera, person collapsing without warning, medical incident, people rushing to help, CCTV footage"
+    },
+    "kimodo_prompt": "a person suddenly collapsing to the ground with no warning, medical emergency, unconscious"
+  },
+  "drag_body": {
+    "job_id": "c4796ccc-4e3f-4b71-bacf-93e9b181ef2c",
+    "npz": "dd629421-24ae-462c-bdff-b46711d05ab3_motion.npz",
+    "category": "violence",
+    "tags": [
+      "drag",
+      "victim",
+      "unconscious",
+      "violent",
+      "crime"
+    ],
+    "cosmos_prompts": {
+      "night_alley": "Dark alley CCTV footage, person dragging unconscious victim across the ground, night time, low light surveillance camera, crime scene",
+      "parking_lot": "Parking lot security camera, person dragging unconscious body across concrete, nighttime, overhead surveillance angle, crime",
+      "underpass": "Underpass surveillance camera, person dragging another along ground, dark area, disturbing security footage"
+    },
+    "kimodo_prompt": "a person dragging another unconscious or injured person along the ground"
+  },
+  "person_crouching_hiding": {
+    "job_id": "8e5e4ef3-8f13-4e84-9ae4-86f4f01455db",
+    "npz": "df0eceb1-cf87-4747-87ec-22eeed96a20b_motion.npz",
+    "category": "distress",
+    "tags": [
+      "hiding",
+      "crouch",
+      "fear",
+      "cower",
+      "distress"
+    ],
+    "cosmos_prompts": {
+      "night_alley": "Nighttime CCTV footage, person crouching and hiding in alley, cowering in fear against wall, suspicious behavior, security camera",
+      "parking_lot": "Parking lot security camera, person hiding crouched behind a car, fear response, night time, surveillance footage",
+      "metro_station": "Metro station surveillance camera, person crouching in corner, hiding, distressed behavior, security footage"
+    },
+    "kimodo_prompt": "a person crouching down and hiding, cowering in fear, pressed against a wall"
+  },
+  "waving_help": {
+    "job_id": "28ec8b03-bebe-4de1-89ab-7e16e2380696",
+    "npz": "19590402-cdcc-4bdc-8359-ff50a18b2338_motion.npz",
+    "category": "distress",
+    "tags": [
+      "help",
+      "wave",
+      "signal",
+      "distress",
+      "emergency"
+    ],
+    "cosmos_prompts": {
+      "city_street": "CCTV footage, person waving arms frantically on city street, calling for help in distress, urgent desperate gestures, passersby ignoring, security camera",
+      "night_street": "Nighttime surveillance camera, person waving for help on dark street, emergency distress signal, arm waving, desperate, security footage",
+      "parking_lot": "Parking lot security camera, person in distress waving frantically for help, isolated location, urgent gestures, CCTV overhead"
+    },
+    "kimodo_prompt": "a person waving their arms frantically calling for help, distress signal, desperate gestures"
+  }
+}

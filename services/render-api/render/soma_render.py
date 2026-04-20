@@ -54,14 +54,38 @@ def _load_soma(npz_path):
 
 
 def _vertex_colors_cosmos(bind_verts, colors):
-    """Paint all vertices with Skin color only (no clothing zones)."""
-    skin = np.array(colors["Skin"], dtype=np.uint8)
-    return np.tile(skin, (len(bind_verts), 1)).astype(np.uint8)
+    V = len(bind_verts)
+    vc = np.zeros((V, 4), dtype=np.uint8)
+    y_min, y_max = bind_verts[:,1].min(), bind_verts[:,1].max()
+    y_norm = (bind_verts[:,1] - y_min) / (y_max - y_min)
+    x_abs  = np.abs(bind_verts[:,0])
+    z_vals = bind_verts[:,2]
+
+    head_mask = y_norm > 0.80
+    z_min = bind_verts[head_mask,2].min() if head_mask.sum() > 0 else 0
+    z_max = bind_verts[head_mask,2].max() if head_mask.sum() > 0 else 1
+
+    for v in range(V):
+        yn, xn, zn = y_norm[v], x_abs[v], z_vals[v]
+        if head_mask[v]:
+            hz = (zn - z_min) / max(z_max - z_min, 1e-6)
+            vc[v] = colors["Skin"] if hz > 0.4 else colors["Hair"]
+        elif (y_norm[v] > 0.74) and not head_mask[v]:
+            vc[v] = colors["Skin"]
+        elif yn < 0.08:   vc[v] = colors["Shoes"]
+        elif yn < 0.14:   vc[v] = colors["Socks"]
+        elif yn < 0.52:   vc[v] = colors["Legs"]
+        elif yn < 0.56:   vc[v] = colors["Belt"]
+        elif yn < 0.80:   vc[v] = colors["Torso"] if xn < 0.18 else colors["Skin"]
+        else:             vc[v] = colors["Skin"]
+
+    vc[(y_norm > 0.20) & (y_norm < 0.60) & (x_abs > 0.22)] = colors["Skin"]
+    return vc
 
 
 def _vertex_colors_skeleton(bind_verts):
     V = len(bind_verts)
-    vc = np.full((V, 4), [240, 240, 245, 255], dtype=np.uint8)
+    vc = np.full((V, 4), [210, 210, 220, 255], dtype=np.uint8)
     return vc
 
 
@@ -114,40 +138,45 @@ def _get_crowd_mesh(soma_skin, bind_verts, posed_joints, global_rot_mats,
 
 
 
-
-
-
 def _build_grid_mesh(gw=8.0, cell_size=1.0, line_frac=0.06):
     """Build a single flat ground mesh with white grid lines painted as vertex colors.
     Centered at origin; translate to foot_y + cx/cz at render time."""
-    N = int(2 * gw / cell_size) + 1
-    verts = []; faces = []; colors = []; vi = 0
+    N = int(2 * gw / cell_size) + 1   # grid lines per axis
+    verts = []
+    faces = []
+    colors = []
+    vi = 0
 
-    def add_quad(v0, v1, v2, v3, col):
+    def add_quad(v0,v1,v2,v3, col):
         nonlocal vi
-        verts.extend([v0, v1, v2, v3])
-        faces.append([vi, vi+1, vi+2]); faces.append([vi, vi+2, vi+3])
-        colors.extend([col]*4); vi += 4
+        verts.extend([v0,v1,v2,v3])
+        faces.append([vi,vi+1,vi+2]); faces.append([vi,vi+2,vi+3])
+        colors.extend([col]*4)
+        vi += 4
 
-    # Base slab (dark grey asphalt)
-    add_quad([-gw,0,-gw],[gw,0,-gw],[gw,0,gw],[-gw,0,gw],[220,218,215,255])
+    # Base slab (dark grey)
+    add_quad([-gw,0,-gw],[gw,0,-gw],[gw,0,gw],[-gw,0,gw],[60,62,65,255])
 
     lh = 0.02
     lw = gw * line_frac
+    # Lines along X (constant Z)
     for j in range(N):
         z = -gw + j * cell_size
         add_quad([-gw,lh,z-lw],[gw,lh,z-lw],[gw,lh,z+lw],[-gw,lh,z+lw],[255,255,255,255])
+    # Lines along Z (constant X)
     for i in range(N):
         x = -gw + i * cell_size
         add_quad([x-lw,lh,-gw],[x+lw,lh,-gw],[x+lw,lh,gw],[x-lw,lh,gw],[255,255,255,255])
 
-    mesh = trimesh.Trimesh(
-        vertices=np.array(verts, dtype=np.float32),
-        faces=np.array(faces, dtype=np.int32),
+    import trimesh as _tm
+    import numpy as _np
+    mesh = _tm.Trimesh(
+        vertices=_np.array(verts, dtype=_np.float32),
+        faces=_np.array(faces, dtype=_np.int32),
         process=False
     )
-    mesh.visual = trimesh.visual.ColorVisuals(mesh=mesh,
-        vertex_colors=np.array(colors, dtype=np.uint8))
+    mesh.visual = _tm.visual.ColorVisuals(mesh=mesh,
+        vertex_colors=_np.array(colors, dtype=_np.uint8))
     return mesh
 
 _grid_mesh_cache = _build_grid_mesh()
@@ -211,7 +240,7 @@ def render(npz_path, out_video, texture_mode="cosmos", colors=None,
     for f in os.listdir(out_dir): os.remove(os.path.join(out_dir, f))
 
     renderer = pyrender.OffscreenRenderer(W, H)
-    camera   = pyrender.PerspectiveCamera(yfov=np.pi/2.5, aspectRatio=W/H)
+    camera   = pyrender.PerspectiveCamera(yfov=np.pi/3.0, aspectRatio=W/H)
 
     # ── Compute root trajectory for camera placement ──
     # Extract XZ path across all frames to decide camera mode
@@ -240,14 +269,14 @@ def render(npz_path, out_video, texture_mode="cosmos", colors=None,
         # Place camera to the side of the travel path (90° off direction of motion)
         travel_dir = xz_total / (xz_dist + 1e-6)
         perp_dir   = np.array([-travel_dir[1], travel_dir[0]])
-        cam_side_dist = 4.0
-        cam_height    = 2.5
+        cam_side_dist = 5.5
+        cam_height    = 4.0
         cam_xz = mid_xz + perp_dir * cam_side_dist
         cam_mount = np.array([cam_xz[0], cam_height, cam_xz[1]])
         ptz_lag = 0.0   # fully static cam
     else:
         # In-place action (fight, fall, etc.) — elevated corner position
-        cam_mount = np.array([mid_xz[0] - 3.5, 2.5, mid_xz[1] - 3.5])
+        cam_mount = np.array([mid_xz[0] - 5.5, 4.5, mid_xz[1] - 4.0])
         ptz_lag = 0.0   # fully static cam
 
     # PTZ state: static camera always aimed at mid-journey point
@@ -263,13 +292,14 @@ def render(npz_path, out_video, texture_mode="cosmos", colors=None,
         mesh_tri.visual = trimesh.visual.ColorVisuals(mesh=mesh_tri, vertex_colors=vertex_colors)
 
         # ── Scene with ground plane ──
-        bg = [200, 200, 200, 255]
-        amb = [1.0, 1.0, 1.0]
+        bg = [18, 18, 18, 255] if texture_mode != "skeleton" else [0, 0, 0, 255]
+        amb = [1.0, 1.0, 1.0] if texture_mode == "skeleton" else [0.3, 0.3, 0.3]
         scene = pyrender.Scene(ambient_light=amb, bg_color=bg)
         scene.add(pyrender.Mesh.from_trimesh(mesh_tri, smooth=True))
 
-        # ── Ground plane: dark asphalt slab + white grid lines ──
+        # ── Ground plane: dark slab + white grid via texture-painted mesh ──
         foot_y = float(verts_np[:, 1].min()) - 0.01
+        gw = 8.0
         scene.add(pyrender.Mesh.from_trimesh(_grid_mesh_cache, smooth=False),
                   pose=np.array([[1,0,0,cx],[0,1,0,foot_y],[0,0,1,cz],[0,0,0,1]], dtype=np.float32))
 
@@ -293,15 +323,14 @@ def render(npz_path, out_video, texture_mode="cosmos", colors=None,
         _ptz_state[0] += ptz_lag * (cx - _ptz_state[0])
         _ptz_state[1] += ptz_lag * (cz - _ptz_state[1])
         cam_pos = cam_mount.copy()
-        _char_mid_y = float(verts_np[:, 1].mean())
-        target  = np.array([_ptz_state[0], _char_mid_y, _ptz_state[1]])
+        target  = np.array([_ptz_state[0], 0.9, _ptz_state[1]])
         fwd = target - cam_pos; fwd /= np.linalg.norm(fwd)
         rgt = np.cross(fwd, [0, 1, 0]); rgt /= np.linalg.norm(rgt)
         upv = np.cross(rgt, fwd)
         cp = np.eye(4); cp[:3,0]=rgt; cp[:3,1]=upv; cp[:3,2]=-fwd; cp[:3,3]=cam_pos
         scene.add(camera, pose=cp)
 
-        color_img, _ = renderer.render(scene, flags=0)
+        color_img, _ = renderer.render(scene)
         frame_bgr = cv2.cvtColor(color_img, cv2.COLOR_RGB2BGR)
 
         # Face swap on protagonist only
@@ -312,6 +341,18 @@ def render(npz_path, out_video, texture_mode="cosmos", colors=None,
                 frame_bgr = swapper.get(frame_bgr, dst, src_face, paste_back=True)
 
         # HUD overlay
+        if texture_mode != "skeleton":
+            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            img  = Image.fromarray(frame_rgb)
+            draw = ImageDraw.Draw(img)
+            draw.rectangle([0,0,W,22], fill=(0,0,0,200))
+            draw.text((8,4), f"■ REC  CAM-04  {i/fps:05.2f}s", fill=(255,50,50))
+            draw.text((W-170,4), "AI SURVEILLANCE ACTIVE", fill=(255,180,0))
+            draw.rectangle([0,H-20,W,H], fill=(0,0,0,180))
+            ts = datetime(2026,4,12,19,0,0) + timedelta(seconds=i/fps)
+            draw.text((8,H-16), "CROWD INCIDENT DETECTED", fill=(80,255,100))
+            draw.text((W-165,H-16), ts.strftime("%Y-%m-%d  %H:%M:%S"), fill=(180,180,180))
+            frame_bgr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
 
         cv2.imwrite(f"{out_dir}/frame_{i:04d}.png", frame_bgr)
 
