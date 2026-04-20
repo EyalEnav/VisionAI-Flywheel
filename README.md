@@ -58,7 +58,7 @@ Text prompt
 ## 🚀 Deploy on NVIDIA Brev
 
 ### One-click deploy
-[![Deploy on Brev](https://brev.nvidia.com/assets/deploy-badge.svg)](https://brev.nvidia.com/launchable/deploy/now?launchableID=env-3AuTjTao5gelkXaCcUkXTRNbdyL)
+[![Deploy on Brev](https://brev.nvidia.com/assets/deploy-badge.svg)](https://brev.nvidia.com/launchable/deploy?launchableID=env-3CPOb6lPulFg4OALeWRWYLHw24P)
 
 ### Hardware requirements
 | Resource | Minimum | Recommended |
