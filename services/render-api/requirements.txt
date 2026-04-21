@@ -21,3 +21,4 @@ transformers>=4.45.0
 accelerate
 flash-attn  # recommended for Qwen3-VL speed
 omegaconf
+hydra-core

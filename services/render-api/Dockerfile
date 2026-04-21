@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir -r kimodo_requirements.txt
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir omegaconf hydra-core
 
 COPY server.py .
 COPY render/ render/
